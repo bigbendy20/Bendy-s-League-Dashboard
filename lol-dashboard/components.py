@@ -17,6 +17,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from compat import FULL_WIDTH
+
 import ddragon
 import insights
 import live_tips
@@ -98,21 +100,18 @@ def render_sparkline_strip(data: pd.DataFrame):
     if len(trend) >= 2:
         trend["win_pct"] = trend["win"].astype(int).rolling(10, min_periods=1).mean() * 100
         st.plotly_chart(
-            sparkline(trend["win_pct"], accent, "Win % (10-game roll)"),
-            use_container_width=True, config={"displayModeBar": False},
+            sparkline(trend["win_pct"], accent, "Win % (10-game roll)"), **FULL_WIDTH, config={"displayModeBar": False},
         )
         trend["kda_roll"] = trend["kda"].rolling(10, min_periods=1).mean()
         st.plotly_chart(
-            sparkline(trend["kda_roll"], "#2DD4BF", "KDA (10-game roll)"),
-            use_container_width=True, config={"displayModeBar": False},
+            sparkline(trend["kda_roll"], "#2DD4BF", "KDA (10-game roll)"), **FULL_WIDTH, config={"displayModeBar": False},
         )
     else:
         st.caption("Not enough games yet for a win % sparkline.")
         st.caption("Not enough games yet for a KDA sparkline.")
     if len(lp_hist) >= 2:
         st.plotly_chart(
-            sparkline(lp_hist["league_points"], "#A855F7", "LP (tracked history)"),
-            use_container_width=True, config={"displayModeBar": False},
+            sparkline(lp_hist["league_points"], "#A855F7", "LP (tracked history)"), **FULL_WIDTH, config={"displayModeBar": False},
         )
     else:
         st.caption("LP sparkline will build up the more you use this dashboard.")
@@ -240,7 +239,7 @@ def render_patch_win_rate(data: pd.DataFrame, title: str):
         labels={"win_rate": "Win rate (%)", "patch": "Patch"}, title=title,
     )
     fig.update_layout(template=PLOT_TEMPLATE)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, **FULL_WIDTH)
 
 
 def render_keystone_win_rates(data: pd.DataFrame):
@@ -335,7 +334,7 @@ def render_performance_radar(data: pd.DataFrame, objectives_df=None, label: str 
         height=420,
         margin=dict(l=60, r=60, t=40, b=40),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, **FULL_WIDTH)
 
     strongest, weakest = radar_highlights(scores)
     if strongest and weakest and strongest != weakest:
@@ -434,7 +433,7 @@ def render_win_probability_review(data: pd.DataFrame):
         template=PLOT_TEMPLATE, yaxis_title="Win probability (%)",
         xaxis_title="Minute", yaxis=dict(range=[0, 100]), height=340,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, **FULL_WIDTH)
 
     swings = biggest_swings(curve)
     if swings:
@@ -682,7 +681,7 @@ def render_position_heatmap(pos_df: pd.DataFrame, title: str):
         margin=dict(l=0, r=0, t=50, b=0),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, **FULL_WIDTH)
 
 
 def render_highlight_reel(data: pd.DataFrame):

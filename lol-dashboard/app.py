@@ -2,9 +2,13 @@ import os
 from pathlib import Path
 
 import pandas as pd
+
+import compat
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+
+from compat import FULL_WIDTH
 
 import auth
 import env_file
@@ -416,7 +420,7 @@ with ctrl_account:
     )
 
 with ctrl_refresh:
-    refresh_clicked = st.button("↻ Refresh", type="primary", use_container_width=True)
+    refresh_clicked = st.button("↻ Refresh", type="primary", **FULL_WIDTH)
 
 # Only worth showing once there's more than one person to switch between —
 # in local mode this is a single profile and the control would be noise.
@@ -438,7 +442,7 @@ if len(registered) > 1:
             st.rerun()
 
 with ctrl_display:
-    with st.popover("Display", use_container_width=True):
+    with st.popover("Display", **FULL_WIDTH):
         # `key="dark_mode"` writes straight to the session_state value read
         # near the top of the file, so no separate assignment is needed here.
         st.toggle("Dark mode", key="dark_mode")
@@ -457,7 +461,7 @@ with ctrl_display:
         )
 
 with ctrl_settings:
-    with st.popover("Settings", use_container_width=True):
+    with st.popover("Settings", **FULL_WIDTH):
         st.caption("Hero art")
         # Sourced from champions already in your match history — guarantees
         # a real, valid Data Dragon splash/icon rather than a free-text
@@ -629,7 +633,7 @@ def fetch_everything():
         # swallows its own errors — so a failure here leaves the list empty
         # rather than taking down the whole load.
         st.session_state.mastery = client.get_champion_mastery(puuid)
-        st.session_state.last_updated = pd.Timestamp.utcnow()
+        st.session_state.last_updated = compat.utcnow()
         return True, None
     except Exception as e:
         return False, str(e)
@@ -842,7 +846,7 @@ def poll_for_new_games():
         return
     new_ids = unseen_match_ids(latest, st.session_state.get("loaded_match_ids"))
     if not new_ids:
-        st.session_state.poll_status = f"checked {relative_time(pd.Timestamp.utcnow())}"
+        st.session_state.poll_status = f"checked {relative_time(compat.utcnow())}"
         return
     st.session_state.poll_status = f"found {len(new_ids)} new game(s)"
     # A full rerun, not just this fragment: new games change every page.

@@ -14,6 +14,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from compat import FULL_WIDTH
+
 import ddragon
 import insights
 import rank_history
@@ -170,7 +172,7 @@ def page_home():
                     title="LP Over Time (tracked since you started using this dashboard)",
                 )
                 fig.update_layout(template=PLOT_TEMPLATE)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, **FULL_WIDTH)
             else:
                 st.caption(
                     "LP trend will build up the more you use this dashboard — Riot's API only "
@@ -229,7 +231,7 @@ def page_home():
                     labels={"win_rate": "Win rate (%)", "game_length_bucket": "Game length"},
                 )
                 fig.update_layout(template=PLOT_TEMPLATE)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, **FULL_WIDTH)
 
     with section_card("home-deeper", "Deeper Numbers", icon="🔎"):
         kd_wr = kill_diff_win_rate(filtered_df)
@@ -240,7 +242,7 @@ def page_home():
                 title="Win Rate by Kill Differential",
             )
             fig.update_layout(template=PLOT_TEMPLATE)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, **FULL_WIDTH)
             st.caption("How often you win when you're up kills vs. down kills (kills − deaths in that game).")
 
         st.markdown("**Win Rate by Patch**")
@@ -270,7 +272,7 @@ def page_home():
                 "Win rate without": f"{wr_missed}%",
             })
         if first_stat_rows:
-            st.dataframe(pd.DataFrame(first_stat_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(first_stat_rows), **FULL_WIDTH, hide_index=True)
         else:
             st.caption("No first-blood/objective data in this set yet.")
 
@@ -496,7 +498,7 @@ def page_champions():
                         title="Mastery points vs. win rate (bubble size = games played)",
                     )
                     fig.update_layout(template=PLOT_TEMPLATE)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, **FULL_WIDTH)
                     percent_table(
                         merged.sort_values("Mastery points", ascending=False),
                         hide_index=True,
@@ -520,7 +522,7 @@ def page_champions():
                 template=PLOT_TEMPLATE,
                 xaxis=dict(categoryorder="array", categoryarray=list(role_wr["role_label"])),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, **FULL_WIDTH)
             percent_table(role_wr, hide_index=True)
 
     with section_card(
@@ -557,11 +559,11 @@ def page_trends():
         c3.metric("Recent Vision", r_vis, delta=round(r_vis - a_vis, 2))
 
     with section_card("trends-overtime", "Performance Over Time", icon="📈"):
-        st.plotly_chart(pretty_trend_chart(filtered_df, "kda", "KDA Over Time"), use_container_width=True)
-        st.plotly_chart(pretty_trend_chart(filtered_df, "cs_per_min", "CS / Min Over Time"), use_container_width=True)
-        st.plotly_chart(pretty_trend_chart(filtered_df, "vision_score", "Vision Score Over Time"), use_container_width=True)
-        st.plotly_chart(pretty_trend_chart(filtered_df, "kill_participation", "Kill Participation Over Time"), use_container_width=True)
-        st.plotly_chart(pretty_trend_chart(filtered_df, "damage_share", "Damage Share Over Time"), use_container_width=True)
+        st.plotly_chart(pretty_trend_chart(filtered_df, "kda", "KDA Over Time"), **FULL_WIDTH)
+        st.plotly_chart(pretty_trend_chart(filtered_df, "cs_per_min", "CS / Min Over Time"), **FULL_WIDTH)
+        st.plotly_chart(pretty_trend_chart(filtered_df, "vision_score", "Vision Score Over Time"), **FULL_WIDTH)
+        st.plotly_chart(pretty_trend_chart(filtered_df, "kill_participation", "Kill Participation Over Time"), **FULL_WIDTH)
+        st.plotly_chart(pretty_trend_chart(filtered_df, "damage_share", "Damage Share Over Time"), **FULL_WIDTH)
 
     with section_card(
         "trends-vision", "Vision & Utility",
@@ -576,9 +578,9 @@ def page_trends():
             ("Avg Control Wards Bought", vis["vision_wards_bought"]),
             ("Avg CC Score", averages(filtered_df)["cc_score"]),
         ], cols_per_row=2)
-        st.plotly_chart(pretty_trend_chart(filtered_df, "wards_placed", "Wards Placed Over Time"), use_container_width=True)
-        st.plotly_chart(pretty_trend_chart(filtered_df, "wards_killed", "Wards Killed Over Time"), use_container_width=True)
-        st.plotly_chart(pretty_trend_chart(filtered_df, "cc_score", "Crowd Control Score Over Time"), use_container_width=True)
+        st.plotly_chart(pretty_trend_chart(filtered_df, "wards_placed", "Wards Placed Over Time"), **FULL_WIDTH)
+        st.plotly_chart(pretty_trend_chart(filtered_df, "wards_killed", "Wards Killed Over Time"), **FULL_WIDTH)
+        st.plotly_chart(pretty_trend_chart(filtered_df, "cc_score", "Crowd Control Score Over Time"), **FULL_WIDTH)
 
     with section_card("trends-tilt", "Tilt Check", "When do you actually play well?", icon="🕐"):
         hour_wr = performance_by_hour(filtered_df)
@@ -595,7 +597,7 @@ def page_trends():
             fig.update_layout(template=PLOT_TEMPLATE)
             fig.update_xaxes(categoryorder="array",
                              categoryarray=list(hour_wr["hour_display"]))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, **FULL_WIDTH)
 
         weekday_wr = performance_by_weekday(filtered_df)
         if not weekday_wr.empty:
@@ -605,7 +607,7 @@ def page_trends():
                 title="Win Rate by Day of Week",
             )
             fig.update_layout(template=PLOT_TEMPLATE)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, **FULL_WIDTH)
 
         after_wr = win_rate_after_result(filtered_df)
         if not after_wr.empty:
@@ -615,7 +617,7 @@ def page_trends():
                 title="Win Rate After a Win vs. After a Loss",
             )
             fig.update_layout(template=PLOT_TEMPLATE)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, **FULL_WIDTH)
             st.caption(
                 "Approximate — uses games in this queue filter sorted by time as a stand-in "
                 "for 'the previous game,' which may not always be truly back-to-back."
@@ -673,8 +675,8 @@ def page_trends():
                 labels={"per_game": "Per game", "ping": ""},
             )
             fig.update_layout(template=PLOT_TEMPLATE)
-            st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(pings, use_container_width=True, hide_index=True)
+            st.plotly_chart(fig, **FULL_WIDTH)
+            st.dataframe(pings, **FULL_WIDTH, hide_index=True)
 
     with section_card("trends-patch-runes", "Patch & Rune Tendencies", icon="🧬"):
         st.markdown("**Win Rate by Patch**")
@@ -781,7 +783,7 @@ def page_trends():
                 template=PLOT_TEMPLATE, title="Average Gold — Wins vs. Losses",
                 xaxis_title="Minute", yaxis_title="Gold",
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, **FULL_WIDTH)
 
         general_diff = st.session_state.gold_diff_cache.get("__general__")
         if general_diff is not None and not general_diff.empty:
@@ -791,7 +793,7 @@ def page_trends():
                 title="Average Gold Lead/Deficit vs. Lane Opponent",
             )
             fig.update_layout(template=PLOT_TEMPLATE)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, **FULL_WIDTH)
             st.caption("Positive = ahead of your direct lane opponent (same role, other team) at that checkpoint.")
 
         general_cs_diff = st.session_state.cs_diff_cache.get("__general__")
@@ -802,7 +804,7 @@ def page_trends():
                 title="Average CS Lead/Deficit vs. Lane Opponent",
             )
             fig.update_layout(template=PLOT_TEMPLATE)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, **FULL_WIDTH)
             st.caption(
                 "Often a cleaner read on lane phase than the gold chart above — gold also "
                 "swings on kills, plates, and bounties that aren't strictly about laning."
@@ -925,7 +927,7 @@ def page_deepdive():
     )
 
     with section_card("dd-performance", f"{selected} — Performance", icon="📈", featured=True):
-        st.plotly_chart(pretty_trend_chart(sub, "kda", f"{selected} — KDA Trend"), use_container_width=True)
+        st.plotly_chart(pretty_trend_chart(sub, "kda", f"{selected} — KDA Trend"), **FULL_WIDTH)
 
         champ_kd_wr = kill_diff_win_rate(sub)
         if not champ_kd_wr.empty:
@@ -935,7 +937,7 @@ def page_deepdive():
                 title=f"{selected} — Win Rate by Kill Differential",
             )
             fig.update_layout(template=PLOT_TEMPLATE)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, **FULL_WIDTH)
 
         st.markdown(f"**{selected} — Win Rate by Patch**")
         render_patch_win_rate(sub, f"{selected} — Win Rate by Patch")
@@ -954,7 +956,7 @@ def page_deepdive():
                 template=PLOT_TEMPLATE,
                 xaxis=dict(categoryorder="array", categoryarray=list(champ_role_wr["role_label"])),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, **FULL_WIDTH)
             percent_table(champ_role_wr, hide_index=True)
         elif champ_roles:
             st.markdown(f"**Role:** {champ_roles[0]} — all {g} games.")
@@ -1201,7 +1203,7 @@ def page_deepdive():
                 name="Losses", line=dict(color="#FB7185", width=3),
             ))
             fig.update_layout(template=PLOT_TEMPLATE, xaxis_title="Minute", yaxis_title="Gold")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, **FULL_WIDTH)
 
         champ_diff = st.session_state.gold_diff_cache.get(selected)
         if champ_diff is not None and not champ_diff.empty:
@@ -1211,7 +1213,7 @@ def page_deepdive():
                 labels={"avg_diff": "Gold diff", "minute": "Minute"},
             )
             fig.update_layout(template=PLOT_TEMPLATE)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, **FULL_WIDTH)
 
         champ_cs_diff = st.session_state.cs_diff_cache.get(selected)
         if champ_cs_diff is not None and not champ_cs_diff.empty:
@@ -1221,7 +1223,7 @@ def page_deepdive():
                 labels={"avg_diff": "CS diff", "minute": "Minute"},
             )
             fig.update_layout(template=PLOT_TEMPLATE)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, **FULL_WIDTH)
 
         champ_obj = st.session_state.objectives_cache.get(selected)
         if champ_obj is not None and not champ_obj.empty:
@@ -1294,7 +1296,7 @@ def page_compare():
                 name=champ_b, line=dict(color="#FB7185", width=3),
             ))
         fig.update_layout(template=PLOT_TEMPLATE, title="5-game rolling KDA average")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, **FULL_WIDTH)
 
         st.markdown("**Win rate by patch — overlaid**")
         patch_a = win_rate_by_patch(sub_a, min_games=2)
@@ -1308,7 +1310,7 @@ def page_compare():
             if not patch_b.empty:
                 fig.add_trace(go.Bar(x=patch_b["patch"], y=patch_b["win_rate"], name=champ_b, marker_color="#FB7185"))
             fig.update_layout(template=PLOT_TEMPLATE, barmode="group", yaxis_title="Win rate (%)")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, **FULL_WIDTH)
 
 
 # ==================== Page: Roles ====================
@@ -1352,7 +1354,7 @@ def page_roles():
             template=PLOT_TEMPLATE,
             xaxis=dict(categoryorder="array", categoryarray=list(role_wr["role_label"])),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, **FULL_WIDTH)
         percent_table(role_wr, hide_index=True)
 
     with section_card("roles-averages", "Averages by Role", icon="📊"):
@@ -1433,7 +1435,7 @@ def page_raw():
         # that should show non-core modes alongside the rest. Everything else
         # reads the core-only frame. "Raw" would be a lie otherwise.
         ordered = all_df.sort_values("game_creation", ascending=False)
-        st.dataframe(ordered, use_container_width=True)
+        st.dataframe(ordered, **FULL_WIDTH)
 
     with section_card(
         "raw-export", "Export",
@@ -1636,7 +1638,7 @@ def page_tilt():
                         "after": "Loss came", "losses": "Losses",
                         "forfeits": "FF'd", "ff_rate": "FF Rate",
                     }),
-                    hide_index=True, use_container_width=True,
+                    hide_index=True, **FULL_WIDTH,
                     column_config={"FF Rate": st.column_config.NumberColumn(format="%.1f%%")},
                 )
                 base = ff_streak[ff_streak["after"] == "After a win"]
@@ -1698,7 +1700,7 @@ def page_tilt():
                         "depth": "Session position", "games": "Games",
                         "wins": "Wins", "win_rate": "Win Rate",
                     }),
-                    hide_index=True, use_container_width=True,
+                    hide_index=True, **FULL_WIDTH,
                     column_config={"Win Rate": st.column_config.NumberColumn(format="%.1f%%")},
                 )
                 first, last = depth.iloc[0], depth.iloc[-1]
@@ -1731,7 +1733,7 @@ def page_tilt():
                         "after": "Situation", "games": "Games",
                         "wins": "Wins", "win_rate": "Win Rate",
                     }),
-                    hide_index=True, use_container_width=True,
+                    hide_index=True, **FULL_WIDTH,
                     column_config={"Win Rate": st.column_config.NumberColumn(format="%.1f%%")},
                 )
                 base = streaks[streaks["after"] == "After a win"]
@@ -1767,7 +1769,7 @@ def page_tilt():
                         "label": "Hour", "games": "Games",
                         "wins": "Wins", "win_rate": "Win Rate",
                     }),
-                    hide_index=True, use_container_width=True,
+                    hide_index=True, **FULL_WIDTH,
                     column_config={"Win Rate": st.column_config.NumberColumn(format="%.1f%%")},
                 )
                 overall_games, overall_wins, _ = overall_win_rate(scoped)
@@ -1798,7 +1800,7 @@ def page_tilt():
                         "champion": "Champion", "losses": "Losses",
                         "forfeits": "FF'd", "ff_rate": "FF Rate",
                     }),
-                    hide_index=True, use_container_width=True,
+                    hide_index=True, **FULL_WIDTH,
                     column_config={"FF Rate": st.column_config.NumberColumn(format="%.1f%%")},
                 )
                 st.caption(

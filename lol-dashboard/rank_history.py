@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pandas as pd
 
+import compat
+
 DATA_DIR = Path(__file__).parent / "data"
 RANK_HISTORY_PATH = DATA_DIR / "rank_history.json"
 
@@ -19,7 +21,7 @@ def log_snapshot(league_entries: list[dict]) -> None:
     """Append a timestamped snapshot of each queue's current standing."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     history = _load_raw()
-    timestamp = pd.Timestamp.utcnow().isoformat()
+    timestamp = compat.utcnow().isoformat()
 
     for entry in league_entries:
         history.append(
@@ -123,7 +125,7 @@ def lp_gain_rate(lp_hist: pd.DataFrame, window_days: int = 7) -> float | None:
     Returns None if there isn't enough tracked history yet to say anything."""
     if lp_hist.empty or len(lp_hist) < 2:
         return None
-    cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=window_days)
+    cutoff = compat.utcnow() - pd.Timedelta(days=window_days)
     recent = lp_hist[lp_hist["timestamp"] >= cutoff]
     if len(recent) < 2:
         recent = lp_hist  # window too sparse — fall back to full tracked history

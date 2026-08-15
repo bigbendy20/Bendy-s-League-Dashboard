@@ -14,6 +14,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from compat import FULL_WIDTH
+
 import ddragon
 import insights
 import rank_history
@@ -106,7 +108,7 @@ def percent_table(data: pd.DataFrame, **kwargs):
         for col, label in PERCENT_COLUMNS.items()
         if col in data.columns
     }
-    st.dataframe(data, use_container_width=True, column_config=config, **kwargs)
+    st.dataframe(data, **FULL_WIDTH, column_config=config, **kwargs)
 
 
 def metric_grid(items: list, cols_per_row: int = 3):

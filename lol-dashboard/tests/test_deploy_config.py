@@ -159,3 +159,79 @@ class TestNoRealPlayersInTrackedFiles:
                 if name in text:
                     offenders.append(f"{os.path.basename(path)}: {name}")
         assert not offenders, "real Riot IDs in committable files: " + ", ".join(offenders)
+
+
+class TestNoDeprecatedApis:
+    """Deprecations that were already past their removal date in the logs.
+
+    Neither mattered much alone. Together they produced hundreds of lines per
+    page load, and a log that is 95% deprecation warnings is a log nobody
+    reads — the next real error arrives in the middle of it. That's the cost
+    being prevented here, not the eventual removal.
+    """
+
+    def _sources(self):
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        for path in root.glob("*.py"):
+            yield path, path.read_text(encoding="utf-8")
+
+    def test_nothing_calls_use_container_width(self):
+        """`compat.py` is exempt: it holds the fallback for old Streamlit
+        versions, which is the one legitimate use of the deprecated keyword.
+        Excluding it by name rather than loosening the pattern — a looser
+        match would stop catching the real thing."""
+        offenders = [p.name for p, text in self._sources()
+                     if "use_container_width=" in text and p.name != "compat.py"]
+        assert not offenders, offenders
+
+    def test_nothing_calls_timestamp_utcnow_directly(self):
+        """`compat.utcnow()` is the one place that knows the replacement, so
+        the next pandas change is one edit rather than seven."""
+        offenders = [p.name for p, text in self._sources()
+                     if "Timestamp.utcnow()" in text and p.name != "compat.py"]
+        assert not offenders, offenders
+
+    def test_the_width_shim_follows_the_installed_streamlit(self):
+        """Detected, not hardcoded — asserted by reloading `compat` against a
+        fake Streamlit of each shape.
+
+        The first version of this test inspected whatever `streamlit` happened
+        to be loaded and returned early if inspection failed. By the time it
+        ran, `test_concurrency` had already replaced Streamlit with a stub, so
+        it bailed out every time and passed vacuously: a mutant hardcoding the
+        deprecated keyword survived it untouched.
+        """
+        import importlib
+        import sys
+        import types
+
+        saved = sys.modules.get("streamlit")
+        try:
+            modern = types.ModuleType("streamlit")
+            modern.dataframe = lambda data, width=None: None
+            sys.modules["streamlit"] = modern
+            assert importlib.reload(importlib.import_module("compat")).FULL_WIDTH == {
+                "width": "stretch"}
+
+            old = types.ModuleType("streamlit")
+            old.dataframe = lambda data, use_container_width=None: None
+            sys.modules["streamlit"] = old
+            assert importlib.reload(importlib.import_module("compat")).FULL_WIDTH == {
+                "use_container_width": True}
+        finally:
+            if saved is None:
+                sys.modules.pop("streamlit", None)
+            else:
+                sys.modules["streamlit"] = saved
+            importlib.reload(importlib.import_module("compat"))
+
+    def test_the_utcnow_shim_preserves_timezone_awareness(self):
+        """The first version of the shim stripped the timezone on the belief
+        that `utcnow()` was naive. It isn't, and two rank-history tests failed
+        immediately — comparing a naive timestamp against a tz-aware column
+        raises rather than quietly differing."""
+        import compat
+
+        assert compat.utcnow().tz is not None

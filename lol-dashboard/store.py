@@ -40,6 +40,8 @@ from pathlib import Path
 
 import pandas as pd
 
+import compat
+
 import env_file
 import profiles as _profiles
 
@@ -261,7 +263,7 @@ class FileStore:
         return self.root / f"{safe}_rank.json"
 
     def save_rank_snapshot(self, puuid: str, league_entries: list, timestamp=None) -> int:
-        stamp = timestamp or pd.Timestamp.utcnow().isoformat()
+        stamp = timestamp or compat.utcnow().isoformat()
         history = self.load_rank_snapshots(puuid)
         latest = {}
         for row in history:
@@ -491,7 +493,7 @@ class SqlStore:
     # ---- rank history ----
     def save_rank_snapshot(self, puuid: str, league_entries: list, timestamp=None) -> int:
         """Store a standing, but only if it changed. Returns rows written."""
-        stamp = timestamp or pd.Timestamp.utcnow().isoformat()
+        stamp = timestamp or compat.utcnow().isoformat()
         latest = {}
         for row in self.load_rank_snapshots(puuid):
             latest[row.get("queue_type")] = row

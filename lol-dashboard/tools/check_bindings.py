@@ -298,6 +298,14 @@ def main() -> int:
     bound = bound_by_app()
     # `from stats import *` is in every bound module; take its public surface.
     import importlib.util
+    import sys
+
+    # `stats` imports its siblings, so the project root has to be importable.
+    # This worked for as long as stats.py imported nothing local; the first
+    # sibling import broke the checker rather than the app, which is a
+    # confusing way to find out.
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
     spec = importlib.util.spec_from_file_location("stats", ROOT / "stats.py")
     stats_mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(stats_mod)

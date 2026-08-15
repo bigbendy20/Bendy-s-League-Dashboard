@@ -7,6 +7,8 @@ import datetime
 
 import pandas as pd
 
+import compat
+
 
 def to_local_time(epoch_ms, tz=None) -> pd.Timestamp:
     """Riot's epoch-millisecond timestamp as *local wall-clock* time.
@@ -404,7 +406,7 @@ def relative_time(then, now=None) -> str:
     a missing timestamp rather than raising or printing a bare None."""
     if then is None:
         return "unknown"
-    now = now or pd.Timestamp.utcnow()
+    now = now or compat.utcnow()
     then = pd.Timestamp(then)
     # Compare like with like — a naive timestamp against an aware one raises.
     if then.tzinfo is None and now.tzinfo is not None:
