@@ -288,3 +288,72 @@ class TestRefreshCadenceFitsTheFreeTier:
         """The other direction. A board that updates twice a day isn't one
         anybody opens after a game."""
         assert self._cron_minutes() <= 30
+
+
+class TestInteractiveBatchScripts:
+    """The `.bat` files that read typed input.
+
+    Two bugs shipped in `Link email.bat` and neither could fail a Python
+    test, because neither is Python. Both are the kind that present as "it
+    doesn't work" with no error to read:
+
+      * `setlocal enabledelayedexpansion` makes cmd strip `!` from anything
+        typed at a `set /p` prompt, silently mangling an email or Riot ID
+        containing one;
+      * a bare `exit /b` on the quit path closes the window instantly, which
+        looks identical to a crash.
+
+    Checked as text because that's what these are. A `.bat` has no import to
+    exercise and no return value to assert on.
+    """
+
+    def _batch_files(self):
+        """Yield (path, executable text) with `rem` and `::` comments removed.
+
+        Stripping comments first, because the first version of this check
+        flagged `Link email.bat` for the `rem` line *explaining why* delayed
+        expansion is switched off. That is the fifth time in this project a
+        check has matched text that merely mentions the thing rather than the
+        thing itself — a commented-out `concurrency:`, a docstring naming
+        `refresh_job`, `streamlit[auth]` in a comment, the word "truncate" in
+        prose, and now this.
+        """
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        for path in sorted(root.glob("*.bat")):
+            raw = path.read_text(encoding="utf-8", errors="replace")
+            live = "\n".join(
+                "" if re.match(r"\s*(rem\b|::)", line, re.I) else line
+                for line in raw.splitlines())
+            yield path, live
+
+    def test_scripts_that_read_input_do_not_enable_delayed_expansion(self):
+        offenders = [
+            path.name for path, text in self._batch_files()
+            if "set /p" in text.lower() and "enabledelayedexpansion" in text.lower()
+        ]
+        assert not offenders, (
+            f"{offenders} read typed input with delayed expansion on, which "
+            f"strips '!' from what the user types")
+
+    def test_every_exit_path_pauses(self):
+        """A window that closes on its own tells the user nothing. Every
+        script here is launched by double-click, so anything printed before an
+        unpaused exit is unreadable."""
+        import re
+
+        offenders = []
+        for path, text in self._batch_files():
+            lines = [l.strip() for l in text.splitlines()]
+            for i, line in enumerate(lines):
+                if not re.match(r"^exit /b\b", line, re.I):
+                    continue
+                # A `pause` in the few lines above this exit is what makes the
+                # message readable. Looking back rather than forward because
+                # the pause always precedes the exit.
+                window = lines[max(0, i - 4):i]
+                if not any(l.lower().startswith("pause") for l in window):
+                    offenders.append(f"{path.name}:{i + 1}")
+        assert not offenders, f"exit without a preceding pause at {offenders}"
