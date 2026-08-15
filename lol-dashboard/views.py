@@ -1531,106 +1531,162 @@ def page_other_modes():
 def page_tilt():
     """Whether this player's results depend on how the last game went.
 
-    Every card here is a comparison between two sets of the same player's
-    games, shown with both sample sizes and an explicit verdict on whether
-    the gap clears significance. That framing is the point: "tilt" is easy to
-    feel and hard to demonstrate, and a dashboard that shows 47% next to 51%
-    without saying "that's noise" is inventing a problem to solve.
+    Tone: light. The numbers underneath are not. Every card compares two sets
+    of the same player's games, shows both sample sizes, and says out loud
+    when a gap is noise — which, on real data, it usually is. A tilt page that
+    never says "this is nothing" is inventing a problem to sell a cure, and
+    the jokes are there to make an honest null result fun to read rather than
+    to paper over a weak one.
 
-    Four comparisons on this page, so `separated()` is called with
-    `comparisons=4` — a Bonferroni correction. Without it, testing four
-    things at 5% each means a roughly one-in-five chance of calling something
-    real when nothing is.
+    Five comparisons here, so `separated()` is called with `comparisons=5`.
+    Testing five things at 5% each is a one-in-four chance of finding
+    something that isn't there.
     """
-    render_hero("Tilt", "Does the last game change the next one?")
+    render_hero("Tilt", "Receipts for the thing you said wasn't happening")
 
     scoped = core_only(filtered_df) if not filtered_df.empty else filtered_df
+    scoped = real_games(scoped)
     if len(scoped) < 50:
         st.info(
-            f"Only {len(scoped)} Summoner's Rift games here. Tilt patterns need "
-            "a few hundred before the differences mean anything — this fills in "
-            "as the board collects more."
+            f"Only {len(scoped)} Summoner's Rift games here. Tilt needs a few "
+            "hundred before any of it means anything — which is itself a "
+            "reassuring result. Come back after a rough week."
         )
         return
 
-    COMPARISONS = 4
+    COMPARISONS = 5
 
-    def verdict(a_wins, a_games, b_wins, b_games, worse_label, better_label):
-        """One honest sentence about a two-way split."""
+    def verdict(a_wins, a_games, b_wins, b_games, worse, better, null):
         if not a_games or not b_games:
-            return "Not enough games on one side to compare."
+            return "Not enough games on one side to compare yet."
         a_rate, b_rate = a_wins / a_games * 100, b_wins / b_games * 100
         gap = a_rate - b_rate
         if separated(a_wins, a_games, b_wins, b_games, comparisons=COMPARISONS):
-            direction = worse_label if gap < 0 else better_label
-            return f"**{direction}** — {abs(gap):.1f} points, and the gap clears significance."
-        return (f"{abs(gap):.1f} point difference, which is within noise for "
-                f"{a_games} vs {b_games} games. No effect worth acting on.")
+            return f"**{worse if gap < 0 else better}** — {abs(gap):.1f} points, and it clears significance."
+        return f"{null} ({abs(gap):.1f} points across {a_games} vs {b_games} games — that's noise.)"
+
+    ff = surrender_breakdown(scoped)
+
+    # ---- the headline: how your losses end ------------------------------
+    with section_card(
+        "tilt-ff", "The Surrender Ledger",
+        "Every loss ends somehow. These are the receipts.",
+        icon="🏳️", featured=True,
+    ):
+        if not ff["losses"]:
+            st.caption("No losses on record. Suspicious, frankly.")
+        else:
+            low, high = TYPICAL_FF_LOSS_RATE
+            metric_grid([
+                ("Losses you FF'd", f"{ff['ff_loss_rate']}%"),
+                ("Wins where THEY FF'd", f"{ff['enemy_ff_win_rate']}%"),
+                ("Remakes", ff["remakes"]),
+            ], cols_per_row=3)
+            st.caption(
+                f"{ff['ff_losses']} of {ff['losses']} losses ended in your team "
+                f"voting yes · {ff['enemy_ff_wins']} of {ff['wins']} wins ended "
+                f"with theirs. Remakes are excluded from everything here — a "
+                f"three-minute AFK is not a character flaw."
+            )
+            if ff["ff_loss_rate"] is not None:
+                if ff["ff_loss_rate"] < low:
+                    st.markdown(
+                        f"**You are stubborn.** Typical is {low:.0f}–{high:.0f}% "
+                        f"of losses; you're at {ff['ff_loss_rate']}%. You play "
+                        "them out. Whether that's grit or sunk cost is between "
+                        "you and your queue timer."
+                    )
+                elif ff["ff_loss_rate"] > high:
+                    st.markdown(
+                        f"**You're quick to call it.** Typical is {low:.0f}–{high:.0f}%; "
+                        f"you're at {ff['ff_loss_rate']}%. Not automatically wrong — "
+                        "a fast FF on a dead game buys back real time."
+                    )
+                else:
+                    st.markdown(
+                        f"**Completely unremarkable**, and that's meant kindly: "
+                        f"{ff['ff_loss_rate']}% sits inside the typical "
+                        f"{low:.0f}–{high:.0f}% band."
+                    )
+            if ff["ff_loss_minutes"] and ff["fought_loss_minutes"]:
+                saved = ff["fought_loss_minutes"] - ff["ff_loss_minutes"]
+                hours = saved * ff["ff_losses"] / 60
+                st.markdown(
+                    f"Your forfeited losses run **{ff['ff_loss_minutes']:.0f} min** "
+                    f"against **{ff['fought_loss_minutes']:.0f} min** for the ones "
+                    f"you play out — about **{hours:.0f} hours** of your life "
+                    "reclaimed by the surrender vote."
+                )
 
     col_l, col_r = st.columns(2)
 
+    # ---- does a bad run change the *choice* you make? --------------------
     with col_l:
         with section_card(
-            "tilt-streak", "After a Losing Streak",
-            "The 'should I stop' question, answered from your own games.",
-            icon="🔥", featured=True,
+            "tilt-ff-streak", "Do You Give Up Faster When It's Going Badly?",
+            "The one tilt question you actually control the answer to.",
+            icon="📉",
         ):
-            streaks = losing_streak_effect(scoped)
-            if streaks.empty:
-                st.caption("Not enough games yet.")
+            ff_streak = surrender_after_losses(scoped)
+            if ff_streak.empty:
+                st.caption("Not enough losses yet to break down.")
             else:
-                baseline = streaks[streaks["after"] == "After a win"]
                 st.dataframe(
-                    streaks.rename(columns={
-                        "after": "Situation", "games": "Games",
-                        "wins": "Wins", "win_rate": "Win Rate",
+                    ff_streak.rename(columns={
+                        "after": "Loss came", "losses": "Losses",
+                        "forfeits": "FF'd", "ff_rate": "FF Rate",
                     }),
                     hide_index=True, use_container_width=True,
-                    column_config={"Win Rate": st.column_config.NumberColumn(format="%.1f%%")},
+                    column_config={"FF Rate": st.column_config.NumberColumn(format="%.1f%%")},
                 )
-                worst = streaks[streaks["after"] != "After a win"]
-                if not baseline.empty and not worst.empty:
-                    b = baseline.iloc[0]
-                    w = worst.sort_values("win_rate").iloc[0]
+                base = ff_streak[ff_streak["after"] == "After a win"]
+                tail = ff_streak[ff_streak["after"].str.contains(r"\+")]
+                if not base.empty and not tail.empty:
+                    b, t = base.iloc[0], tail.iloc[0]
                     st.markdown(verdict(
-                        int(w["wins"]), int(w["games"]),
-                        int(b["wins"]), int(b["games"]),
-                        f"You play worse {w['after'].lower()}",
-                        f"You play better {w['after'].lower()}",
+                        int(t["forfeits"]), int(t["losses"]),
+                        int(b["forfeits"]), int(b["losses"]),
+                        "You hold on longer once you're already losing",
+                        "You tap out faster once you're already losing",
+                        "You give up at the same rate however the night's going.",
                     ))
                 st.caption(
-                    "Read against the 'after a win' row — a 47% win rate means "
-                    "nothing until you know what you do otherwise."
+                    "Better posed than win rate: whether you *win* the next game "
+                    "is mostly not up to you. Whether you vote yes is entirely "
+                    "up to you, so a change here is behaviour, not luck."
                 )
 
+    # ---- requeue speed ---------------------------------------------------
     with col_r:
         with section_card(
-            "tilt-requeue", "Requeue vs. Break",
-            "After a loss, does going straight back in cost you?",
+            "tilt-requeue", "The Instant Requeue",
+            "Straight back in, or a walk around the room?",
             icon="⏱️",
         ):
             requeue = quick_requeue_effect(scoped)
-            qg, qw = requeue["quick"][0], requeue["quick"][1]
-            bg, bw = requeue["break"][0], requeue["break"][1]
+            qg, qw = requeue["quick"]
+            bg, bw = requeue["break"]
             if not qg or not bg:
                 st.caption("Not enough back-to-back games after losses yet.")
             else:
                 metric_grid([
                     (f"Requeued <{requeue['minutes']}min", f"{qw / qg * 100:.1f}%"),
-                    ("Took a break", f"{bw / bg * 100:.1f}%"),
+                    ("Took a breather", f"{bw / bg * 100:.1f}%"),
                 ], cols_per_row=2)
-                st.caption(f"{qg} games vs {bg} games, both following a loss.")
+                st.caption(f"{qg} games versus {bg}, all of them following a loss.")
                 st.markdown(verdict(
                     qw, qg, bw, bg,
-                    "Requeueing fast costs you", "Requeueing fast suits you",
+                    "Requeueing angry costs you", "Requeueing angry suits you",
+                    "The break makes no difference to your results.",
                 ))
 
     col_l2, col_r2 = st.columns(2)
 
+    # ---- session depth ---------------------------------------------------
     with col_l2:
         with section_card(
-            "tilt-session", "Deep Into a Session",
-            "Win rate by how many games you're into a sitting.",
+            "tilt-session", "One More Game",
+            "Win rate by how deep into the sitting you are.",
             icon="🪫",
         ):
             depth = session_depth_effect(scoped)
@@ -1645,36 +1701,69 @@ def page_tilt():
                     hide_index=True, use_container_width=True,
                     column_config={"Win Rate": st.column_config.NumberColumn(format="%.1f%%")},
                 )
-                first = depth.iloc[0]
-                last = depth.iloc[-1]
+                first, last = depth.iloc[0], depth.iloc[-1]
                 st.markdown(verdict(
                     int(last["wins"]), int(last["games"]),
                     int(first["wins"]), int(first["games"]),
-                    "You fade late in a session", "You warm up as you play",
+                    "You fade late in a session", "You warm up as you go",
+                    "Game nine looks a lot like game one.",
                 ))
                 st.caption(
-                    "Not a controlled comparison: long sessions happen partly "
-                    "*because* they were going badly, so some of any drop is "
-                    "chasing losses rather than fatigue. Worth noticing, not "
-                    "worth treating as a cause."
+                    "Not a controlled comparison, and the direction of the bias "
+                    "is knowable: long sessions happen partly *because* they "
+                    "were going badly. Some of any decline is chasing losses "
+                    "rather than tiring — this can't separate the two."
                 )
 
+    # ---- streak effect on results ---------------------------------------
     with col_r2:
         with section_card(
+            "tilt-streak", "After a Losing Streak",
+            "The 'should I stop' question, answered from your own games.",
+            icon="🔥",
+        ):
+            streaks = losing_streak_effect(scoped)
+            if streaks.empty:
+                st.caption("Not enough games yet.")
+            else:
+                st.dataframe(
+                    streaks.rename(columns={
+                        "after": "Situation", "games": "Games",
+                        "wins": "Wins", "win_rate": "Win Rate",
+                    }),
+                    hide_index=True, use_container_width=True,
+                    column_config={"Win Rate": st.column_config.NumberColumn(format="%.1f%%")},
+                )
+                base = streaks[streaks["after"] == "After a win"]
+                worst = streaks[streaks["after"] != "After a win"]
+                if not base.empty and not worst.empty:
+                    b = base.iloc[0]
+                    w = worst.sort_values("win_rate").iloc[0]
+                    st.markdown(verdict(
+                        int(w["wins"]), int(w["games"]),
+                        int(b["wins"]), int(b["games"]),
+                        f"You really are worse {w['after'].lower()}",
+                        f"You're better {w['after'].lower()}",
+                        "Losing streaks don't predict your next game.",
+                    ))
+
+    col_l3, col_r3 = st.columns(2)
+
+    with col_l3:
+        with section_card(
             "tilt-hours", "Your Worst Hours",
-            "When you actually play badly, with enough games to mean it.",
+            "When you play badly, with the games to prove it.",
             icon="🕐",
         ):
             hours = worst_hours(scoped)
             if hours.empty:
                 st.caption(
-                    "No hour has 20+ games yet. Fewer than that and the worst-"
-                    "looking hour is just the emptiest one."
+                    "No hour has 20+ games yet. Below that the worst-looking "
+                    "hour is just the emptiest one."
                 )
             else:
-                show = hours.head(5)[["label", "games", "wins", "win_rate"]]
                 st.dataframe(
-                    show.rename(columns={
+                    hours.head(5)[["label", "games", "wins", "win_rate"]].rename(columns={
                         "label": "Hour", "games": "Games",
                         "wins": "Wins", "win_rate": "Win Rate",
                     }),
@@ -1682,16 +1771,39 @@ def page_tilt():
                     column_config={"Win Rate": st.column_config.NumberColumn(format="%.1f%%")},
                 )
                 overall_games, overall_wins, _ = overall_win_rate(scoped)
-                worst_hour = hours.iloc[0]
+                worst = hours.iloc[0]
                 st.markdown(verdict(
-                    int(worst_hour["wins"]), int(worst_hour["games"]),
-                    overall_wins - int(worst_hour["wins"]),
-                    overall_games - int(worst_hour["games"]),
-                    f"You're genuinely worse at {worst_hour['label']}",
-                    f"You're better at {worst_hour['label']}",
+                    int(worst["wins"]), int(worst["games"]),
+                    overall_wins - int(worst["wins"]),
+                    overall_games - int(worst["games"]),
+                    f"{worst['label']} is genuinely your worst hour",
+                    f"{worst['label']} actually suits you",
+                    f"{worst['label']} looks bad but is within noise.",
                 ))
+                st.caption("Compared against your other hours, not your overall "
+                           "record — which includes these games and would flatten it.")
+
+    with col_r3:
+        with section_card(
+            "tilt-ff-champ", "Champions You Give Up On",
+            "Whose losses you'd rather not sit through.",
+            icon="🙈",
+        ):
+            champ_ff = surrender_by_champion(scoped)
+            if champ_ff.empty:
+                st.caption("No champion has enough losses yet — a good problem.")
+            else:
+                st.dataframe(
+                    champ_ff.head(6).rename(columns={
+                        "champion": "Champion", "losses": "Losses",
+                        "forfeits": "FF'd", "ff_rate": "FF Rate",
+                    }),
+                    hide_index=True, use_container_width=True,
+                    column_config={"FF Rate": st.column_config.NumberColumn(format="%.1f%%")},
+                )
                 st.caption(
-                    "Compared against your other hours, not against your "
-                    "overall record — which includes these games and would "
-                    "flatten the difference."
+                    "Almost certainly about the games these champions end up in "
+                    "— a losing lane on a scaling pick feels unwinnable at 15 — "
+                    "rather than the champion. Offered for entertainment, not "
+                    "as a ban list."
                 )

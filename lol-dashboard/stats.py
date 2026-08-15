@@ -506,6 +506,12 @@ def surrender_summary(df: pd.DataFrame) -> dict:
     """How often your games end in a surrender, and how those split between
     wins and losses. Surrendering isn't inherently good or bad — a fast FF
     on a lost game saves time — so this is reported flat, without a verdict."""
+    # NOTE: this returned zeroes for the entire life of the site. It reads
+    # `ended_in_surrender`, and `parse_match` did not emit that column until
+    # surrenders were added properly — so the guard below caught every real
+    # frame and the card showed 0.0% to everyone. Its unit test passed
+    # because the fixture built the column by hand. Exactly the skins-card
+    # failure: a stat with no input, reporting a confident number.
     empty = {
         "surrender_rate": 0.0, "early_surrender_rate": 0.0,
         "surrendered_games": 0, "wins_by_surrender": 0, "losses_by_surrender": 0,
@@ -635,6 +641,25 @@ def parse_match(match: dict, puuid: str) -> dict | None:
             queue_category(queue_id),
         ),
         "win": bool(participant.get("win")),
+        # How the game ended. Three separate flags from match-v5, and the
+        # distinction between them is the whole point:
+        #
+        #   gameEndedInSurrender      — someone FF'd. True for BOTH teams, so
+        #                               on its own it doesn't say who gave up.
+        #   gameEndedInEarlySurrender — a remake (the <3 minute vote, usually
+        #                               an AFK). Not a real game.
+        #   teamEarlySurrendered      — *your* team took the early vote.
+        #
+        # Combining the first with the result is what makes it useful:
+        # surrendered + lost means your team gave up; surrendered + won means
+        # theirs did.
+        "ended_in_surrender": bool(participant.get("gameEndedInSurrender")),
+        "ended_in_early_surrender": bool(participant.get("gameEndedInEarlySurrender")),
+        "team_early_surrendered": bool(participant.get("teamEarlySurrendered")),
+        "we_surrendered": bool(participant.get("gameEndedInSurrender"))
+        and not bool(participant.get("win")),
+        "enemy_surrendered": bool(participant.get("gameEndedInSurrender"))
+        and bool(participant.get("win")),
         "kills": kills,
         "deaths": deaths,
         "assists": assists,
@@ -2197,3 +2222,137 @@ def worst_hours(df: pd.DataFrame, tz=None, min_games: int = 20) -> pd.DataFrame:
     grouped["win_rate"] = (grouped["wins"] / grouped["games"] * 100).round(1)
     grouped["label"] = grouped["hour"].map(hour_label)
     return grouped.sort_values("win_rate").reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Surrenders
+#
+# The most human statistic on the site. `gameEndedInSurrender` is true for
+# both teams — it says a game ended in a vote, not who called it — so every
+# function here combines it with the result: surrendered *and lost* is your
+# team giving up, surrendered *and won* is theirs.
+#
+# Remakes are excluded everywhere. `gameEndedInEarlySurrender` is the <3
+# minute AFK vote; counting those as "you gave up" would be both wrong and
+# unkind.
+
+# League of Graphs and OP.GG analyses put 30-40% of an average player's losses
+# ending in a forfeit. Used only to give a number context, never as a target:
+# the interesting comparison on this site is always you against you.
+TYPICAL_FF_LOSS_RATE = (30.0, 40.0)
+
+
+def real_games(df: pd.DataFrame) -> pd.DataFrame:
+    """Everything except remakes. A 3-minute AFK remake isn't a game."""
+    if df.empty or "ended_in_early_surrender" not in df.columns:
+        return df
+    return df[~df["ended_in_early_surrender"].fillna(False).astype(bool)]
+
+
+def surrender_breakdown(df: pd.DataFrame) -> dict:
+    """Who gives up, how often, and how long the games run.
+
+    Returns counts rather than only percentages, because "you FF 38% of your
+    losses" reads very differently at 40 losses and at 400.
+    """
+    empty = {
+        "losses": 0, "ff_losses": 0, "ff_loss_rate": None,
+        "wins": 0, "enemy_ff_wins": 0, "enemy_ff_win_rate": None,
+        "remakes": 0, "ff_loss_minutes": None, "fought_loss_minutes": None,
+    }
+    if df.empty or "we_surrendered" not in df.columns:
+        return empty
+
+    remakes = int(df["ended_in_early_surrender"].fillna(False).astype(bool).sum()) \
+        if "ended_in_early_surrender" in df.columns else 0
+    d = real_games(df)
+    if d.empty:
+        return {**empty, "remakes": remakes}
+
+    losses = d[~d["win"].astype(bool)]
+    wins = d[d["win"].astype(bool)]
+    ff_losses = losses[losses["we_surrendered"].fillna(False).astype(bool)]
+    fought = losses[~losses["we_surrendered"].fillna(False).astype(bool)]
+    enemy_ff = wins[wins["enemy_surrendered"].fillna(False).astype(bool)]
+
+    def minutes(frame):
+        if frame.empty or "game_duration_min" not in frame.columns:
+            return None
+        return round(float(frame["game_duration_min"].mean()), 1)
+
+    return {
+        "losses": len(losses),
+        "ff_losses": len(ff_losses),
+        "ff_loss_rate": round(len(ff_losses) / len(losses) * 100, 1) if len(losses) else None,
+        "wins": len(wins),
+        "enemy_ff_wins": len(enemy_ff),
+        "enemy_ff_win_rate": round(len(enemy_ff) / len(wins) * 100, 1) if len(wins) else None,
+        "remakes": remakes,
+        "ff_loss_minutes": minutes(ff_losses),
+        "fought_loss_minutes": minutes(fought),
+    }
+
+
+def surrender_after_losses(df: pd.DataFrame, max_streak: int = 3) -> pd.DataFrame:
+    """How often a *loss* becomes a forfeit, by the streak that preceded it.
+
+    This is the tilt question worth asking, and it's better posed than win
+    rate: whether you win the next game is mostly out of your hands, but
+    whether you vote to end it early is entirely a choice. If losses turn into
+    forfeits faster after a bad run, that's a behaviour change showing up in
+    the data rather than an inference about mood.
+
+    Denominator is losses, not games — "40% of your losses after two losses
+    were forfeits" is a sentence about giving up. Including wins would make it
+    a sentence about winning.
+    """
+    d = _chronological(real_games(df))
+    if len(d) < 2 or "we_surrendered" not in d.columns:
+        return pd.DataFrame(columns=["after", "losses", "forfeits", "ff_rate"])
+
+    losses_before = []
+    run = 0
+    for win in d["win"]:
+        losses_before.append(run)
+        run = 0 if win else run + 1
+    d = d.assign(losses_before=losses_before).iloc[1:]
+    d = d[~d["win"].astype(bool)]
+    if d.empty:
+        return pd.DataFrame(columns=["after", "losses", "forfeits", "ff_rate"])
+
+    rows = []
+    for n in range(0, max_streak + 1):
+        subset = d[d["losses_before"] >= n] if n == max_streak else d[d["losses_before"] == n]
+        if subset.empty:
+            continue
+        label = "After a win" if n == 0 else (
+            f"After {n}+ losses" if n == max_streak
+            else f"After {n} loss" + ("es" if n > 1 else ""))
+        forfeits = int(subset["we_surrendered"].fillna(False).astype(bool).sum())
+        rows.append({"after": label, "losses": len(subset), "forfeits": forfeits,
+                     "ff_rate": round(forfeits / len(subset) * 100, 1)})
+    return pd.DataFrame(rows)
+
+
+def surrender_by_champion(df: pd.DataFrame, min_losses: int = 8) -> pd.DataFrame:
+    """Which champions you give up on, as a share of that champion's losses.
+
+    A high rate here is usually about the games the champion tends to be in —
+    a losing lane on a scaling pick feels unwinnable early — rather than the
+    champion itself. Presented for interest, not as advice.
+    """
+    d = real_games(df)
+    if d.empty or "we_surrendered" not in d.columns:
+        return pd.DataFrame(columns=["champion", "losses", "forfeits", "ff_rate"])
+    losses = d[~d["win"].astype(bool)]
+    if losses.empty:
+        return pd.DataFrame(columns=["champion", "losses", "forfeits", "ff_rate"])
+
+    grouped = (losses.assign(ff=losses["we_surrendered"].fillna(False).astype(bool))
+               .groupby("champion")["ff"].agg(losses="count", forfeits="sum")
+               .reset_index())
+    grouped = grouped[grouped["losses"] >= min_losses]
+    if grouped.empty:
+        return pd.DataFrame(columns=["champion", "losses", "forfeits", "ff_rate"])
+    grouped["ff_rate"] = (grouped["forfeits"] / grouped["losses"] * 100).round(1)
+    return grouped.sort_values("ff_rate", ascending=False).reset_index(drop=True)

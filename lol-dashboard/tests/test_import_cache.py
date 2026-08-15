@@ -192,3 +192,48 @@ class TestRepeatedImportsAreCheap:
         assert first == 20, first
         assert second == 0, f"re-parsed {second} match(es) it already had"
         assert stats_module.parse_match is real_parse
+
+
+class TestReparse:
+    """`--reparse` exists to give old rows a newly added column.
+
+    A mutant that made reparse skip already-stored matches survived every
+    other test here, because the *counts* look identical either way: nothing
+    is added in reparse mode by design. What differs is whether the stored
+    rows change, so that's what has to be asserted.
+    """
+
+    def test_reparse_rewrites_rows_that_already_exist(self):
+        s = _store()
+        s.upsert_profile(_profile("p1", "Bendy"))
+        first = make_match(match_id="NA1_1", puuid="p1")
+        import_cache.import_matches(s, _cache([first]))
+
+        changed = make_match(match_id="NA1_1", puuid="p1")
+        for participant in changed["info"]["participants"]:
+            if participant["puuid"] == "p1":
+                participant["championName"] = "Zed"
+        import_cache.import_matches(s, _cache([changed]), reparse=True)
+        assert s.load_matches("p1").iloc[0]["champion"] == "Zed"
+
+    def test_without_reparse_the_stored_row_is_untouched(self):
+        s = _store()
+        s.upsert_profile(_profile("p1", "Bendy"))
+        import_cache.import_matches(s, _cache([make_match(match_id="NA1_1", puuid="p1")]))
+
+        changed = make_match(match_id="NA1_1", puuid="p1")
+        for participant in changed["info"]["participants"]:
+            if participant["puuid"] == "p1":
+                participant["championName"] = "Zed"
+        import_cache.import_matches(s, _cache([changed]))
+        assert s.load_matches("p1").iloc[0]["champion"] != "Zed"
+
+    def test_reparse_does_not_change_how_many_rows_exist(self):
+        """Run against the real database this must move 5,766 rows and add
+        none of them."""
+        s = _store()
+        s.upsert_profile(_profile("p1", "Bendy"))
+        matches = [make_match(match_id=f"NA1_{i}", puuid="p1") for i in range(12)]
+        import_cache.import_matches(s, _cache(matches))
+        import_cache.import_matches(s, _cache(matches), reparse=True)
+        assert len(s.load_matches("p1")) == 12

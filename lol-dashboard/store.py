@@ -201,15 +201,28 @@ class FileStore:
             # empty and let the next save rewrite it.
             return []
 
-    def save_matches(self, puuid: str, rows: list) -> int:
-        """Add rows that aren't already stored. Returns how many were new."""
+    def save_matches(self, puuid: str, rows: list, overwrite: bool = False) -> int:
+        """Add rows that aren't already stored. Returns how many were new.
+
+        `overwrite=True` replaces rows that *are* already there, and returns
+        how many were rewritten. That exists for one purpose: adding a column
+        to `parse_match` leaves every stored row without it, and the parsed
+        row is all this keeps — so a new field is invisible on all past games
+        until they're re-parsed from the raw JSON archive. Never used by the
+        refresher, which must not rewrite history.
+        """
         existing = {r.get("match_id"): r for r in self._read(puuid)}
         added = 0
         for row in rows:
             mid = row.get("match_id")
-            if mid and mid not in existing:
+            if not mid:
+                continue
+            if mid not in existing or overwrite:
+                if mid in existing and overwrite:
+                    added += 1
+                elif mid not in existing:
+                    added += 1
                 existing[mid] = json.loads(_encode(row))
-                added += 1
         self._path(puuid).write_text(json.dumps(list(existing.values())))
         return added
 
@@ -365,8 +378,13 @@ class SqlStore:
         cur.execute(f"SELECT match_id FROM matches WHERE puuid = {self.p}", (puuid,))
         return {row[0] for row in cur.fetchall()}
 
-    def save_matches(self, puuid: str, rows: list) -> int:
+    def save_matches(self, puuid: str, rows: list, overwrite: bool = False) -> int:
         """Insert rows, ignoring ones already present.
+
+        `overwrite=True` updates the stored blob for rows that already exist,
+        and returns how many were rewritten. Only for re-parsing the archive
+        after `parse_match` gains a column — the refresher never passes it,
+        because nothing that runs on a schedule should rewrite history.
 
         `ON CONFLICT DO NOTHING` rather than a read-then-write: it's one round
         trip, and it's correct even if two refreshers run at once — which they
@@ -390,12 +408,17 @@ class SqlStore:
         before = len(self.known_match_ids(puuid))
         cur = self.conn.cursor()
         placeholders = ", ".join([self.p] * 5)
+        conflict = ("ON CONFLICT (puuid, match_id) DO UPDATE SET "
+                    "data = excluded.data, game_creation = excluded.game_creation, "
+                    "queue_id = excluded.queue_id") if overwrite else "ON CONFLICT DO NOTHING"
         cur.executemany(
             f"INSERT INTO matches (puuid, match_id, game_creation, queue_id, data) "
-            f"VALUES ({placeholders}) ON CONFLICT DO NOTHING",
+            f"VALUES ({placeholders}) {conflict}",
             payload,
         )
         self.conn.commit()
+        if overwrite:
+            return len(payload)
         return len(self.known_match_ids(puuid)) - before
 
     def load_matches(self, puuid: str) -> pd.DataFrame:

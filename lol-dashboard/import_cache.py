@@ -59,7 +59,8 @@ def cached_matches(pattern=None):
             continue
 
 
-def import_matches(data_store, pattern=None, on_progress=None, dry_run=False) -> dict:
+def import_matches(data_store, pattern=None, on_progress=None, dry_run=False,
+                   reparse: bool = False) -> dict:
     """Store every cached match belonging to a tracked profile.
 
     One pass over the cache, checking each match against every profile, since
@@ -72,7 +73,11 @@ def import_matches(data_store, pattern=None, on_progress=None, dry_run=False) ->
     if not tracked:
         return {"scanned": 0, "imported": 0, "per_profile": {}}
 
-    known = {puuid: set(data_store.known_match_ids(puuid)) for puuid in tracked}
+    # In reparse mode nothing counts as known: the point is to rewrite rows
+    # that already exist, because `parse_match` gained a column and stored
+    # rows only carry the fields that existed when they were written.
+    known = {puuid: (set() if reparse else set(data_store.known_match_ids(puuid)))
+             for puuid in tracked}
     pending = {puuid: [] for puuid in tracked}
     report = {"scanned": 0, "imported": 0, "per_profile": {}}
 
@@ -103,7 +108,8 @@ def import_matches(data_store, pattern=None, on_progress=None, dry_run=False) ->
     for puuid, rows in pending.items():
         if not rows:
             continue
-        written = len(rows) if dry_run else data_store.save_matches(puuid, rows)
+        written = len(rows) if dry_run else data_store.save_matches(
+            puuid, rows, overwrite=reparse)
         report["per_profile"][tracked[puuid]] = written
         report["imported"] += written
     return report
@@ -114,13 +120,19 @@ def main(argv=None) -> int:
         description="Import cached matches that Riot no longer lists.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Report what would be imported, write nothing.")
+    parser.add_argument("--reparse", action="store_true",
+                        help="Rewrite matches already stored, so games from "
+                             "before a new stat existed gain its columns.")
     args = parser.parse_args(argv)
 
     from refresh_job import open_store
 
     data_store = open_store()
     print("Reading the local cache. No API calls, nothing downloaded.\n")
-    report = import_matches(data_store, on_progress=print, dry_run=args.dry_run)
+    if args.reparse:
+        print("Reparsing every cached match, including ones already stored.\n")
+    report = import_matches(data_store, on_progress=print, dry_run=args.dry_run,
+                            reparse=args.reparse)
 
     if not report["scanned"]:
         print("No cached matches found.", file=sys.stderr)

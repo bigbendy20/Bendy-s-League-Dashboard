@@ -160,3 +160,143 @@ class TestWorstHours:
 
     def test_empty_input_is_empty_output(self):
         assert stats.worst_hours(pd.DataFrame()).empty
+
+
+def ff_frame(rows):
+    """Games with explicit surrender flags.
+
+    `rows` is (win, ended_in_surrender, early) triples. Built through
+    `parse_match` so the column names are the ones the parser really emits —
+    the surrender card that shipped before this one read
+    `ended_in_surrender` when nothing produced it, and returned zeroes to
+    everyone for months.
+    """
+    import datetime
+
+    out, when = [], datetime.datetime(2026, 3, 1, 18, 0)
+    for i, (win, ff, early) in enumerate(rows):
+        match = make_match(match_id=f"NA1_{i}", puuid="p1", win=win,
+                           creation_ms=int(when.timestamp() * 1000))
+        for p in match["info"]["participants"]:
+            p["gameEndedInSurrender"] = ff
+            p["gameEndedInEarlySurrender"] = early
+        out.append(stats.parse_match(match, "p1"))
+        when += datetime.timedelta(minutes=60)
+    return pd.DataFrame(out)
+
+
+class TestSurrenderParsing:
+    def test_the_parser_emits_the_columns_the_card_reads(self):
+        """The bug this whole feature uncovered: `surrender_summary` had read
+        `ended_in_surrender` since the day it was written, and `parse_match`
+        never produced it. The guard for a missing column returned zeroes, so
+        the card showed 0.0% forever and its unit test passed because the
+        fixture built the column by hand."""
+        row = stats.parse_match(make_match(), "me-puuid")
+        for column in ("ended_in_surrender", "ended_in_early_surrender",
+                       "we_surrendered", "enemy_surrendered"):
+            assert column in row, column
+
+    def test_surrender_is_attributed_by_the_result(self):
+        """`gameEndedInSurrender` is true for BOTH teams — it says a vote
+        passed, not whose. Losing plus surrendered is you; winning plus
+        surrendered is them. Treating the raw flag as "you gave up" would
+        double every count."""
+        lost_to_ff = stats.parse_match(
+            _with_flags(make_match(win=False), ff=True), "me-puuid")
+        won_by_ff = stats.parse_match(
+            _with_flags(make_match(win=True), ff=True), "me-puuid")
+        assert lost_to_ff["we_surrendered"] and not lost_to_ff["enemy_surrendered"]
+        assert won_by_ff["enemy_surrendered"] and not won_by_ff["we_surrendered"]
+
+    def test_a_fought_out_game_is_neither(self):
+        row = stats.parse_match(make_match(win=False), "me-puuid")
+        assert not row["we_surrendered"] and not row["enemy_surrendered"]
+
+
+def _with_flags(match, ff=False, early=False):
+    for p in match["info"]["participants"]:
+        p["gameEndedInSurrender"] = ff
+        p["gameEndedInEarlySurrender"] = early
+    return match
+
+
+class TestSurrenderBreakdown:
+    def test_rates_are_shares_of_losses_and_wins_separately(self):
+        """Two losses (one FF'd) and two wins (one enemy FF) gives 50% on both
+        sides. Deliberately different denominators — dividing either by total
+        games would give 25% and quietly answer a different question."""
+        out = stats.surrender_breakdown(ff_frame([
+            (False, True, False), (False, False, False),
+            (True, True, False), (True, False, False),
+        ]))
+        assert out["ff_loss_rate"] == 50.0
+        assert out["enemy_ff_win_rate"] == 50.0
+        assert out["ff_losses"] == 1 and out["enemy_ff_wins"] == 1
+
+    def test_remakes_are_excluded_from_the_rates_but_counted(self):
+        """A three-minute AFK remake is not someone giving up, and letting it
+        into the denominator would make every player look more stubborn."""
+        out = stats.surrender_breakdown(ff_frame([
+            (False, True, False), (False, True, True), (True, False, False),
+        ]))
+        assert out["remakes"] == 1
+        assert out["losses"] == 1, "the remake was counted as a real loss"
+        assert out["ff_loss_rate"] == 100.0
+
+    def test_missing_columns_give_an_empty_summary_not_a_wrong_one(self):
+        """Rows stored before surrenders were parsed genuinely lack these
+        columns — the store keeps the parsed row, so old rows carry only the
+        fields that existed when they were written. Dropping the columns is
+        what reproduces that; `frame()` builds through `parse_match`, which
+        now emits them, so it can't."""
+        old_rows = frame([W, L]).drop(columns=["we_surrendered", "enemy_surrendered"])
+        out = stats.surrender_breakdown(old_rows)
+        assert out["losses"] == 0 and out["ff_loss_rate"] is None
+
+    def test_game_lengths_are_reported_per_kind_of_loss(self):
+        d = ff_frame([(False, True, False), (False, False, False)])
+        d.loc[0, "game_duration_min"] = 18
+        d.loc[1, "game_duration_min"] = 36
+        out = stats.surrender_breakdown(d)
+        assert out["ff_loss_minutes"] == 18
+        assert out["fought_loss_minutes"] == 36
+
+
+class TestSurrenderAfterLosses:
+    def test_the_denominator_is_losses_not_games(self):
+        """"40% of your losses after two losses were forfeits" is a sentence
+        about giving up. Dividing by all games instead would make it a
+        sentence about winning, and the number would move with form."""
+        out = stats.surrender_after_losses(ff_frame([
+            (True, False, False),    # win (no preceding game counted)
+            (False, True, False),    # loss after a win, FF'd
+            (False, False, False),   # loss after 1 loss, fought
+        ]))
+        by = {r["after"]: r for _, r in out.iterrows()}
+        assert by["After a win"]["losses"] == 1
+        assert by["After a win"]["ff_rate"] == 100.0
+
+    def test_wins_are_not_in_the_table_at_all(self):
+        out = stats.surrender_after_losses(ff_frame([(True, False, False)] * 6))
+        assert out.empty
+
+    def test_remakes_do_not_break_the_streak(self):
+        """A remake isn't a loss and shouldn't reset a losing run — treating
+        it as a win would hide exactly the pattern this measures."""
+        out = stats.surrender_after_losses(ff_frame([
+            (False, False, False), (False, False, True), (False, True, False),
+        ]))
+        assert "After 1 loss" in set(out["after"])
+
+
+class TestSurrenderByChampion:
+    def test_only_champions_with_enough_losses_appear(self):
+        d = ff_frame([(False, True, False)] * 3)
+        assert stats.surrender_by_champion(d, min_losses=8).empty
+
+    def test_rate_is_forfeits_over_that_champions_losses(self):
+        d = ff_frame([(False, True, False)] * 5 + [(False, False, False)] * 5)
+        out = stats.surrender_by_champion(d, min_losses=8)
+        assert out.iloc[0]["losses"] == 10
+        assert out.iloc[0]["ff_rate"] == 50.0

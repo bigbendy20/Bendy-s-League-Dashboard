@@ -486,3 +486,60 @@ class TestProfileGoalRoundTrip:
         assert store.SqlStore._profile_row(
             tuple(range(len(profiles.PROFILE_FIELDS)))
         ).keys() == dict.fromkeys(profiles.PROFILE_FIELDS).keys()
+
+
+class TestReparseOverwrite:
+    """Rewriting stored rows so old games gain a new column.
+
+    The store keeps the *parsed row*, so adding a field to `parse_match`
+    leaves every existing row without it — the stat works on new games and is
+    blank on history. `overwrite=True` is the way back, replayed from the raw
+    JSON archive. Deliberately never used by the refresher: nothing on a
+    five-minute schedule should rewrite history.
+    """
+
+    def _row(self, match_id, **extra):
+        base = stats.parse_match(make_match(match_id=match_id, puuid="p1"), "p1")
+        base.update(extra)
+        return base
+
+    def test_without_overwrite_an_existing_row_is_left_alone(self):
+        s = store.SqlStore(sqlite3.connect(":memory:"), paramstyle="?")
+        s.save_matches("p1", [self._row("NA1_1", champion="Ahri")])
+        s.save_matches("p1", [self._row("NA1_1", champion="Zed")])
+        assert s.load_matches("p1").iloc[0]["champion"] == "Ahri"
+
+    def test_with_overwrite_the_row_is_replaced(self):
+        s = store.SqlStore(sqlite3.connect(":memory:"), paramstyle="?")
+        s.save_matches("p1", [self._row("NA1_1", champion="Ahri")])
+        s.save_matches("p1", [self._row("NA1_1", champion="Zed")], overwrite=True)
+        assert s.load_matches("p1").iloc[0]["champion"] == "Zed"
+
+    def test_overwriting_adds_no_rows(self):
+        """The property that makes a reparse safe to run on the real database:
+        5,766 rows in, 5,766 rows out."""
+        s = store.SqlStore(sqlite3.connect(":memory:"), paramstyle="?")
+        rows = [self._row(f"NA1_{i}") for i in range(20)]
+        s.save_matches("p1", rows)
+        s.save_matches("p1", rows, overwrite=True)
+        assert len(s.load_matches("p1")) == 20
+
+    def test_a_new_column_reaches_old_rows(self):
+        """The whole point, end to end."""
+        s = store.SqlStore(sqlite3.connect(":memory:"), paramstyle="?")
+        old = self._row("NA1_1")
+        del old["we_surrendered"]
+        s.save_matches("p1", [old])
+        assert "we_surrendered" not in s.load_matches("p1").columns
+
+        s.save_matches("p1", [self._row("NA1_1")], overwrite=True)
+        assert "we_surrendered" in s.load_matches("p1").columns
+
+    def test_the_file_store_behaves_the_same(self):
+        """Both backends have to honour `overwrite`, or a reparse works
+        locally and silently does nothing against the hosted database."""
+        s = store.FileStore(tempfile.mkdtemp(prefix="reparse-"))
+        s.save_matches("p1", [self._row("NA1_1", champion="Ahri")])
+        s.save_matches("p1", [self._row("NA1_1", champion="Zed")], overwrite=True)
+        assert s.load_matches("p1").iloc[0]["champion"] == "Zed"
+        assert len(s.load_matches("p1")) == 1
