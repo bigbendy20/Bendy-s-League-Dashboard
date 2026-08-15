@@ -195,7 +195,7 @@ repository secret**, twice:
 | `RIOT_API_KEY` | Your key |
 | `DATABASE_URL` | The Postgres connection string |
 
-The workflow (`.github/workflows/refresh.yml`) runs every 5 minutes on its
+The workflow (`.github/workflows/refresh.yml`) runs every 15 minutes on its
 own. Trigger it once by hand from the **Actions** tab to confirm it works —
 the log prints what it found.
 

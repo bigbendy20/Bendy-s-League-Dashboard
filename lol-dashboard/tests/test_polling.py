@@ -12,6 +12,7 @@ paginating, the feature still works, returns correct results, and silently
 costs fourteen times more — a regression with no symptom. Hence a test that
 counts requests rather than checking the answer.
 """
+import ast
 import sys
 import types
 
@@ -180,3 +181,65 @@ class TestPaginationDoesNotStopEarly:
         ids = _client_with(api).get_all_match_ids("puuid", target=1000)
         assert ids == []
         assert len(api.calls) == 1
+
+
+class TestThePollActuallyReloads:
+    """Finding new games has to lead to loading them.
+
+    The load in `app.py` is guarded by `if refresh_clicked or not loaded_once`,
+    and `loaded_once` is set True on the first pass and never cleared. So the
+    poller could detect new games, set a status saying so, rerun the script —
+    and the guard would skip the load, leaving the page unchanged. Detection
+    worked; the consequence didn't.
+
+    Asserted structurally, on the source. The poller is a Streamlit fragment
+    defined at module scope inside a script that expects a live session, so
+    calling it in isolation would mean rebuilding most of Streamlit. What
+    matters is a property the AST can see exactly: the flag is cleared, and
+    it's cleared *before* the rerun — afterwards would be dead code, since
+    `st.rerun` doesn't return.
+    """
+
+    def _poller(self):
+        import ast
+        import pathlib
+
+        source = (pathlib.Path(__file__).resolve().parent.parent / "app.py").read_text(
+            encoding="utf-8")
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "poll_for_new_games":
+                return node
+        raise AssertionError("poll_for_new_games is gone")
+
+    def test_it_clears_the_loaded_flag(self):
+        clears = [
+            node for node in ast.walk(self._poller())
+            if isinstance(node, ast.Assign)
+            and any(isinstance(t, ast.Attribute) and t.attr == "loaded_once"
+                    for t in node.targets)
+            and isinstance(node.value, ast.Constant) and node.value.value is False
+        ]
+        assert clears, (
+            "the poll reruns without clearing loaded_once, so the reload is "
+            "skipped and newly found games never appear")
+
+    def test_it_clears_the_flag_before_rerunning(self):
+        """`st.rerun()` raises to restart the script, so anything after it
+        never executes. Clearing the flag below the rerun would look correct
+        and do nothing."""
+        body = self._poller().body
+
+        def line_of(predicate):
+            return min((node.lineno for node in ast.walk(self._poller())
+                        if predicate(node)), default=None)
+
+        clear_line = line_of(
+            lambda n: isinstance(n, ast.Assign)
+            and any(isinstance(t, ast.Attribute) and t.attr == "loaded_once"
+                    for t in n.targets))
+        rerun_line = line_of(
+            lambda n: isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute) and n.func.attr == "rerun")
+        assert clear_line is not None and rerun_line is not None
+        assert clear_line < rerun_line, "the flag is cleared after the rerun"

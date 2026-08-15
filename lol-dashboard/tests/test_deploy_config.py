@@ -235,3 +235,56 @@ class TestNoDeprecatedApis:
         import compat
 
         assert compat.utcnow().tz is not None
+
+
+class TestRefreshCadenceFitsTheFreeTier:
+    """The schedule is a *cost* decision, not a taste one.
+
+    Neon's free plan allows 100 CU-hours a month and scales the database to
+    zero after 5 minutes idle. A job every 5 minutes never lets it sleep:
+    0.25 CU (the smallest compute) x 730 hours = ~180 CU-hours, 80% over.
+    Every wake costs its own runtime *plus* a fresh 5-minute idle countdown,
+    so even 10 minutes (~108 CU-hours) doesn't fit.
+
+    Pinned here because the failure is invisible until a bill or a suspended
+    database arrives weeks later, and because "make it refresh faster" is an
+    entirely reasonable-sounding change for someone to make.
+    """
+
+    IDLE_MINUTES = 5          # Neon scale-to-zero
+    JOB_MINUTES = 1           # generous; a quiet cycle is seconds
+    SMALLEST_CU = 0.25
+    FREE_CU_HOURS = 100
+
+    def _cron_minutes(self):
+        import pathlib
+        import re
+
+        text = (pathlib.Path(__file__).resolve().parent.parent
+                / ".github" / "workflows" / "refresh.yml").read_text(encoding="utf-8")
+        # Strip comments first: a commented-out cron mentioning a different
+        # interval would otherwise be read as the real one — the same
+        # "matched text that merely mentions the thing" trap as before.
+        live = "\n".join(line.split("#")[0] for line in text.splitlines())
+        match = re.search(r'cron:\s*"\*/(\d+) \* \* \* \*"', live)
+        assert match, "no minute-interval cron found in the workflow"
+        return int(match.group(1))
+
+    def test_the_schedule_stays_inside_the_free_compute_allowance(self):
+        minutes = self._cron_minutes()
+        runs_per_day = 1440 / minutes
+        if minutes <= self.IDLE_MINUTES:
+            awake_hours_per_day = 24        # it never gets to sleep
+        else:
+            awake_hours_per_day = min(
+                24, runs_per_day * (self.JOB_MINUTES + self.IDLE_MINUTES) / 60)
+        cu_hours = awake_hours_per_day * 30 * self.SMALLEST_CU
+        assert cu_hours <= self.FREE_CU_HOURS, (
+            f"a */{minutes} schedule costs ~{cu_hours:.0f} CU-hours a month "
+            f"against a {self.FREE_CU_HOURS} free allowance — the database "
+            f"would be suspended or billed partway through the month")
+
+    def test_it_still_refreshes_often_enough_to_be_useful(self):
+        """The other direction. A board that updates twice a day isn't one
+        anybody opens after a game."""
+        assert self._cron_minutes() <= 30

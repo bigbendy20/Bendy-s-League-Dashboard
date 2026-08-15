@@ -5,15 +5,35 @@
 # in-app refresher overnight; and the app holds a render lock while drawing
 # a page, so a long fetch on the request path would block every viewer.
 #
-# Cost: Actions is free and unlimited on public repositories. On a private
-# repo the free allowance is 2,000 minutes a month and Actions bills per job
-# rounded up to the whole minute — so this schedule (288 runs/day) would cost
-# ~8,600 minutes and is only viable because the repo is public.
+# Cost, and why the cadence is what it is. Two separate budgets:
+#
+# **GitHub Actions** is free and unlimited on public repositories. On a
+# private repo the allowance is 2,000 minutes a month, billed per job rounded
+# up to the whole minute — so even this schedule would cost thousands of
+# minutes and is only viable because the repo is public.
+#
+# **Neon** is the binding constraint, and it was nearly missed. Its free plan
+# allows 100 CU-hours of compute a month, and the database scales to zero
+# after 5 minutes of inactivity. A job every 5 minutes therefore never lets it
+# sleep: 0.25 CU (the smallest compute) x 730 hours = ~180 CU-hours, or 80%
+# over the allowance. Every wake costs its own runtime *plus* a fresh
+# 5-minute idle countdown, which is why even a 10-minute cadence (~108
+# CU-hours) still doesn't fit.
+#
+#   cadence   runs/day   awake h/day   CU-hours/month
+#       5m         288          24.0        180  over
+#      10m         144          14.4        108  over
+#      15m          96           9.6         72  fits
+#      30m          48           4.8         36  fits
+#
+# 15 minutes keeps games appearing within about twenty minutes while leaving
+# real headroom. If a ninth player joins or Neon changes its terms, the number
+# to change is on the next line.
 name: Refresh League data
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # every 5 minutes; GitHub often runs it late
+    - cron: "*/15 * * * *"  # every 15 minutes; GitHub often runs it late
   workflow_dispatch:         # manual trigger, for testing
 
 concurrency:
@@ -37,7 +57,7 @@ jobs:
 
       - name: Install dependencies
         # Only what the refresher needs — no Streamlit, no plotly. Keeps the
-        # job to a few seconds, which matters when it runs 288 times a day.
+        # job to a few seconds, which matters when it runs 96 times a day.
         run: pip install riotwatcher pandas psycopg[binary]
 
       - name: Refresh

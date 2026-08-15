@@ -909,6 +909,15 @@ def poll_for_new_games():
         st.session_state.poll_status = f"checked {relative_time(compat.utcnow())}"
         return
     st.session_state.poll_status = f"found {len(new_ids)} new game(s)"
+    # Clear the "already loaded" flag, or the rerun below does nothing.
+    #
+    # The load is guarded by `if refresh_clicked or not loaded_once`, and
+    # nothing ever set `loaded_once` back to False — so the poll would report
+    # "found 2 new game(s)", rerun, skip the load, and leave the page exactly
+    # as it was. Auto-refresh detected new games correctly and then declined
+    # to show them, which is the worst version of the bug: the feature looks
+    # like it's working.
+    st.session_state.loaded_once = False
     # A full rerun, not just this fragment: new games change every page.
     st.rerun(scope="app")
 
