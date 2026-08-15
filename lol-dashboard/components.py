@@ -148,7 +148,7 @@ def recent_games_feed(data: pd.DataFrame, n: int = 20):
             f'<img class="item-icon" src="{ddragon.item_icon_url(i, version)}" width="22"/>'
             for i in row["items"] if i
         )
-        date_str = row["game_creation"].strftime("%b %d, %I:%M %p")
+        date_str = game_time(row["game_creation"])
         st.markdown(
             f"""<div class="game-row">
                 <img class="champ-icon" src="{icon}" width="48"/>
@@ -410,7 +410,7 @@ def render_win_probability_review(data: pd.DataFrame):
         return
 
     options = {
-        f"{row['game_creation'].strftime('%b %d, %I:%M %p')} — {row['champion']} "
+        f"{game_time(row['game_creation'])} — {row['champion']} "
         f"({'Win' if row['win'] else 'Loss'})": row["match_id"]
         for _, row in scoped.sort_values("game_creation", ascending=False).iterrows()
     }
@@ -693,7 +693,7 @@ def render_highlight_reel(data: pd.DataFrame):
         row = h["row"]
         icon = ddragon.champion_icon_url(row["champion"], version)
         badge_color = "#2DD4BF" if h["tone"] == "positive" else "#FB7185"
-        date_str = row["game_creation"].strftime("%b %d")
+        date_str = game_time(row["game_creation"])
         st.markdown(
             f"""<div class="game-row">
                 <img class="champ-icon" src="{icon}" width="48"/>

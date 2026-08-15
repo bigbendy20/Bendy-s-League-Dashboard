@@ -461,3 +461,66 @@ class TestRecentFormBaseline:
         """With the complement baseline this clears significance. With the
         superset baseline it doesn't, and the tip would be greyed out."""
         assert self._recent_tip()["weak"] is False
+
+
+class TestGameTime:
+    """One spelling for a match's date and time, everywhere it's listed.
+
+    There were two before: the recent-games feed, scoreboard and deep-dive
+    picker used `"%b %d, %I:%M %p"`, and the highlight reel used a bare
+    `"%b %d"` — so the same game read "Oct 14, 01:32 AM" in one card and
+    "Oct 14" in another. Neither carried the year, which stopped being a
+    detail once the board reached back to September 2024.
+    """
+
+    def _t(self, text):
+        return stats.game_time(pd.Timestamp(text))
+
+    def test_it_carries_the_year(self):
+        """The reason this changed. With history spanning 2024-2026, a
+        highlight labelled "Jul 26" is ambiguous between seasons — and the
+        highlight reel is exactly where old games surface."""
+        assert "2025" in self._t("2025-07-26 12:20:46")
+        assert "2024" in self._t("2024-09-14 09:05:00")
+
+    def test_twelve_hour_clock_with_meridiem(self):
+        assert self._t("2026-08-14 19:57:43").endswith("7:57 PM")
+        assert self._t("2025-10-14 01:32:43").endswith("1:32 AM")
+
+    def test_the_hour_loses_its_leading_zero_and_the_day_keeps_its_meaning(self):
+        """The bug the first version had. Both `%d` and `%I` are zero-padded,
+        so stripping the first " 0" from the formatted string hit whichever
+        came first — on a single-digit day that was the *date*, producing
+        "Mar 4, 2025 · 09:05 AM": exactly backwards.
+        """
+        formatted = self._t("2025-03-04 09:05:00")
+        assert "9:05 AM" in formatted, formatted
+        assert "09:05" not in formatted, formatted
+
+    def test_midnight_and_noon(self):
+        """`%I` returns "12" for both, and `lstrip("0")` leaves "12" alone.
+
+        Worth pinning even though no current mutation breaks it: these are the
+        two hours a 12-hour clock gets wrong most often, and the assertion
+        costs nothing.
+        """
+        assert "12:07 AM" in self._t("2024-12-31 00:07:00")
+        assert "12:20 PM" in self._t("2025-07-26 12:20:46")
+
+    def test_missing_timestamps_render_as_empty_not_an_error(self):
+        """A row without a date should leave a gap in a card, not take the
+        page down with it."""
+        assert stats.game_time(None) == ""
+        assert stats.game_time(pd.NaT) == ""
+
+    def test_every_match_listing_uses_the_helper(self):
+        """Checked in the source, because the failure mode is a *second*
+        spelling reappearing — which renders perfectly well and simply looks
+        inconsistent, so nothing else would catch it."""
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        for name in ("components.py", "views.py"):
+            text = (root / name).read_text(encoding="utf-8")
+            assert "strftime" not in text, (
+                f"{name} formats a timestamp itself instead of using game_time()")

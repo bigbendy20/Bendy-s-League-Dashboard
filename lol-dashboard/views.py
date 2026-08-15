@@ -1031,7 +1031,7 @@ def page_deepdive():
 
     with section_card("dd-buildorder", "Build Order", "Purchase sequence for a specific game", icon="🛒"):
         game_options = {
-            f"{row['game_creation'].strftime('%b %d, %I:%M %p')} — {'Win' if row['win'] else 'Loss'}": row["match_id"]
+            f"{game_time(row['game_creation'])} — {'Win' if row['win'] else 'Loss'}": row["match_id"]
             for _, row in sub.sort_values("game_creation", ascending=False).iterrows()
         }
         picked_label = st.selectbox("View purchase order for a specific game", list(game_options.keys()))

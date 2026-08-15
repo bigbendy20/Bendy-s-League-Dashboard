@@ -2358,3 +2358,49 @@ def surrender_by_champion(df: pd.DataFrame, min_losses: int = 8) -> pd.DataFrame
         return pd.DataFrame(columns=["champion", "losses", "forfeits", "ff_rate"])
     grouped["ff_rate"] = (grouped["forfeits"] / grouped["losses"] * 100).round(1)
     return grouped.sort_values("ff_rate", ascending=False).reset_index(drop=True)
+
+
+# One way to write a game's date and time, used everywhere a match is listed.
+#
+# There were two spellings before this: `"%b %d, %I:%M %p"` in the recent-games
+# feed, the scoreboard and the deep-dive picker, and a bare `"%b %d"` in the
+# highlight reel — so the same game read "Oct 14, 01:32 AM" in one card and
+# "Oct 14" in another.
+#
+# Neither carried the year, which stopped being a detail once the board went
+# back to September 2024: a highlight labelled "Jul 26" is now genuinely
+# ambiguous between two seasons, and the highlight reel is exactly where old
+# games surface.
+GAME_TIME_FORMAT = "%b %d, %Y · %I:%M %p"
+
+
+def game_time(when) -> str:
+    """A timestamp as the site writes it: `Oct 14, 2025 · 1:32 AM`.
+
+    Local time (see `to_local_time`), 12-hour, with the leading zero stripped
+    from the hour — `01:32 AM` reads like a duration rather than a clock.
+    A missing date renders as an empty string, so a row without one leaves a
+    gap in a card instead of taking the page down.
+
+    Assembled from parts rather than by editing the formatted string. The
+    first version stripped the first " 0" it found, which on a single-digit
+    day hit the *date* and left the hour padded — "Mar 4, 2025 · 09:05 AM",
+    exactly backwards. Both fields are zero-padded by strftime, so any
+    find-and-replace on the output is choosing between them by luck.
+
+    Two guards were here and are gone, because mutation testing showed
+    neither could fire. `pd.Timestamp(None)` already yields `NaT` rather than
+    raising, so an explicit None check was unreachable; and `%I` on a
+    12-hour clock returns "01".."12" and never "00", so `lstrip("0")` cannot
+    empty the string and the `or "12"` fallback was dead. Defensive code that
+    can't run is worse than none: it implies a hazard that doesn't exist.
+    """
+    try:
+        stamp = pd.Timestamp(when)
+    except (TypeError, ValueError):
+        return ""
+    if pd.isna(stamp):
+        return ""
+    hour = stamp.strftime("%I").lstrip("0")
+    return (f"{stamp.strftime('%b')} {stamp.day}, {stamp.year} · "
+            f"{hour}:{stamp.strftime('%M %p')}")
