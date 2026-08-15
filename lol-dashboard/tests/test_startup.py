@@ -764,17 +764,25 @@ class TestTheSiteUsesTheConfiguredDatabase:
         app_path = pathlib.Path(__file__).resolve().parent.parent / "app.py"
         tree = ast.parse(app_path.read_text(encoding="utf-8"))
 
-        assignment = None
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name) and target.id == "data_store":
-                        assignment = node.value
-        assert assignment is not None, "app.py never assigns data_store"
-        called = ast.dump(assignment)
-        assert "open_store" in called, (
+        # `store.open_store` may be called from a helper now — the store is
+        # opened once per session rather than once per rerun — so look for the
+        # call anywhere in the module rather than only in the assignment.
+        calls = [
+            ast.dump(node) for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "open_store"
+        ]
+        assert calls, (
             "app.py builds a store directly instead of using store.open_store, "
             "so DATABASE_URL is ignored and the deployed site reads nothing")
+        assert any("store" in c for c in calls)
+
+        # And it must still be the module-level `data_store` everything reads.
+        assigns = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                   for target in node.targets
+                   if isinstance(target, ast.Name) and target.id == "data_store"]
+        assert assigns, "app.py never assigns data_store"
 
 
 class TestTheHeroTitleFollowsTheProfile:
@@ -822,3 +830,58 @@ class TestTheHeroTitleFollowsTheProfile:
         env = dict(self.ENV, RIOT_GAME_NAME=None, RIOT_TAG_LINE=None)
         _run_app(env, seed=_seeded_state())
         assert LAST_GLOBALS.get("PROFILE_TITLE") == LAST_GLOBALS.get("APP_TITLE")
+
+
+class TestTheStoreIsOpenedOncePerSession:
+    """Opening the database is per session, not per rerun.
+
+    Streamlit re-executes the whole script on every interaction. A bare
+    `open_store()` at module scope therefore reconnects on every click — 16 ms
+    against local SQLite, but a TCP connect plus TLS handshake plus auth
+    against hosted Postgres, and a cold start on top if the database has
+    scaled to zero.
+    """
+
+    ENV = {
+        "RIOT_API_KEY": "RGAPI-test-key", "RIOT_GAME_NAME": "Bendy",
+        "RIOT_TAG_LINE": "NA1", "PLATFORM_REGION": "na1",
+        "CONTINENTAL_REGION": "americas", "HERO_CHAMPION": "",
+    }
+    PROFILES = [
+        {"puuid": "p1", "game_name": "Bendy", "tag_line": "NA1",
+         "platform_region": "na1", "continental_region": "americas",
+         "display_name": "Bendy", "email": "bendy@example.com"},
+    ]
+
+    def test_a_rerun_reuses_the_open_connection(self):
+        """`fresh=False` models a rerun: the script re-executes and session
+        state survives. A second `open_store` call there is the regression."""
+        import store as store_module
+
+        calls = {"n": 0}
+        real = store_module.open_store
+
+        def counting(*args, **kwargs):
+            calls["n"] += 1
+            return real(*args, **kwargs)
+
+        store_module.open_store = counting
+        try:
+            before = calls["n"]
+            _run_app(self.ENV, seed=_seeded_state(), registered_profiles=self.PROFILES)
+            fresh_calls = calls["n"] - before
+
+            before = calls["n"]
+            _run_app(self.ENV, seed=_seeded_state(), registered_profiles=self.PROFILES,
+                     fresh=False)
+            rerun_calls = calls["n"] - before
+        finally:
+            store_module.open_store = real
+
+        # The harness opens a store of its own to seed profiles, so each run
+        # includes one call that isn't the app's. Comparing *deltas* isolates
+        # the app's — an absolute count made the first version of this test
+        # fail against correct code, which is its own kind of wrong answer.
+        assert fresh_calls >= 2, "the app never opened a store on a fresh run"
+        assert rerun_calls == fresh_calls - 1, (
+            f"the app reconnected on rerun ({rerun_calls} vs {fresh_calls} calls)")

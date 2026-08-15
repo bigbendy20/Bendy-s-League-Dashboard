@@ -198,7 +198,57 @@ API_KEY = os.getenv("RIOT_API_KEY", "").strip()
 # disk and shown everyone's profile as empty while the database sat there
 # full. `base_dir` is passed so a relative path resolves next to the app, and
 # so the startup tests can point the whole thing at a sandbox.
-data_store = store.open_store(base_dir=os.path.dirname(os.path.abspath(__file__)))
+# Timings for the slow parts of a page load, printed to the server log.
+# Added because "the site is slow" was answered with a plausible story rather
+# than a measurement, and the honest position was that nobody knew which of
+# five candidates it was. One line per load in the log settles it.
+LOAD_TIMINGS = {}
+
+
+def timed(label):
+    """Context manager recording elapsed milliseconds into LOAD_TIMINGS."""
+    import contextlib
+    import time
+
+    @contextlib.contextmanager
+    def _timer():
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            LOAD_TIMINGS[label] = round((time.perf_counter() - start) * 1000)
+
+    return _timer()
+
+
+def open_data_store():
+    """The store for this browser session, opened once and reused.
+
+    This used to be a bare `store.open_store(...)` at module scope, and
+    module scope in Streamlit means **every rerun** — every click, every tab
+    switch, every five-minute poll. Against a local SQLite file that costs
+    16 ms and nobody notices. Against hosted Postgres it's a TCP connect, a
+    TLS handshake and an auth round trip each time, plus a cold start if the
+    database has scaled to zero, which Neon's free tier does after a few
+    minutes idle. That is the difference between a click and a wait.
+
+    Cached in `session_state` rather than `st.cache_resource`: the latter
+    shares one connection across every visitor and therefore across threads,
+    and I'd have to be sure the driver tolerates concurrent use from several
+    of them. One connection per session is unambiguously safe, costs at most
+    eight connections against a free tier that allows far more, and removes
+    the per-rerun handshake either way.
+    """
+    cached = st.session_state.get("_data_store")
+    if cached is not None:
+        return cached
+    with timed("connect"):
+        opened = store.open_store(base_dir=os.path.dirname(os.path.abspath(__file__)))
+    st.session_state["_data_store"] = opened
+    return opened
+
+
+data_store = open_data_store()
 registered = data_store.list_profiles()
 if not registered:
     registered = profiles.bootstrap_from_env(os.environ)
@@ -600,7 +650,8 @@ def fetch_everything():
         ))
         # Everything stored, with no limit. `load_matches` already returns the
         # parsed frame sorted by date, so there's nothing to rebuild.
-        stored = data_store.load_matches(puuid)
+        with timed("load_matches"):
+            stored = data_store.load_matches(puuid)
         if stored.empty:
             # A profile with nothing collected yet — first run, or someone
             # added to the roster since the last refresh. Fetch enough to show
@@ -617,7 +668,8 @@ def fetch_everything():
         # individually: a rate-limited or expired key should cost the rank
         # badge and the avatar, not the entire page.
         try:
-            entries = client.get_league_entries(puuid)
+            with timed("riot_league"):
+                entries = client.get_league_entries(puuid)
             st.session_state.league_entries = entries
             if entries:
                 rank_history.log_snapshot(entries)
@@ -626,13 +678,15 @@ def fetch_everything():
             st.session_state.league_entries = []
 
         try:
-            st.session_state.summoner = client.get_summoner(puuid)
+            with timed("riot_summoner"):
+                st.session_state.summoner = client.get_summoner(puuid)
         except Exception:
             st.session_state.summoner = {}
         # Mastery is a nice-to-have, and get_champion_mastery() already
         # swallows its own errors — so a failure here leaves the list empty
         # rather than taking down the whole load.
-        st.session_state.mastery = client.get_champion_mastery(puuid)
+        with timed("riot_mastery"):
+            st.session_state.mastery = client.get_champion_mastery(puuid)
         st.session_state.last_updated = compat.utcnow()
         return True, None
     except Exception as e:
@@ -643,6 +697,12 @@ if refresh_clicked or not st.session_state.loaded_once:
     with st.spinner("Loading match history..."):
         ok, err = fetch_everything()
     st.session_state.loaded_once = True
+    # One line, in the deployed log, saying where the time went. Cheap enough
+    # to leave on permanently and the only thing that turns "it feels slow"
+    # into something actionable.
+    if LOAD_TIMINGS:
+        print("load timings (ms): " + ", ".join(
+            f"{k}={v}" for k, v in sorted(LOAD_TIMINGS.items(), key=lambda kv: -kv[1])))
     if not ok:
         if "401" in err:
             st.error("401 Unauthorized — your API key is missing, mistyped, or expired.")
