@@ -18,7 +18,6 @@ import ddragon
 import insights
 import rank_history
 import recap
-import replays
 import stats
 from stats import *  # noqa: F403 - the stats layer is this app's vocabulary
 

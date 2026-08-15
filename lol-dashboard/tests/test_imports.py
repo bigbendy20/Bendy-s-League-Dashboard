@@ -53,7 +53,7 @@ STUBBED = (
 )
 
 APP_MODULES = (
-    "stats", "themes", "rank_history", "ddragon", "replays", "insights",
+    "stats", "themes", "rank_history", "ddragon", "insights",
     "recap", "riot_client", "theme_css", "layout", "components", "views",
     "runtime",
 )
@@ -102,3 +102,41 @@ class TestModuleImports:
         for helper in ("render_hero", "section_card", "percent_table", "metric_grid"):
             assert hasattr(layout, helper), f"layout is missing {helper}"
         assert hasattr(components, "recent_games_feed")
+
+
+def test_no_module_imports_a_sibling_that_does_not_exist():
+    """Every module-level local import must resolve to a file that exists.
+
+    Written after deleting `replays.py` and missing that `layout.py` still
+    imported it — the suite passed before the deletion and only failed once
+    the file was gone, so nothing warned that it was still referenced.
+
+    Module-level imports only. `store.py` imports `psycopg` *inside a
+    function* on purpose, so the test suite and local use need no Postgres
+    driver; walking every Import node flagged that as missing, which is the
+    test being wrong rather than the code. Lazy imports are a deliberate
+    pattern here and this must not punish them.
+    """
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    siblings = {p.stem for p in root.glob("*.py")}
+
+    missing = []
+    for path in sorted(root.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:                      # top level only
+            names = []
+            if isinstance(node, ast.Import):
+                names = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names = [node.module.split(".")[0]]
+            for name in names:
+                if name in siblings:
+                    continue
+                try:
+                    __import__(name)
+                except ImportError:
+                    missing.append(f"{path.name} imports {name}")
+    assert not missing, missing
