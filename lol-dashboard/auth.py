@@ -27,6 +27,7 @@ Identity providers are inconsistent about both, and a mismatch here doesn't
 error, it just quietly locks out a legitimate user or — worse, depending on
 the direction — fails to lock out someone.
 """
+from collections.abc import Mapping
 
 
 def normalise(email) -> str:
@@ -76,6 +77,33 @@ def is_allowed(email, allowlist) -> bool:
 DEFAULT_PROVIDER = (None, "Sign in")
 
 
+def _is_table(value) -> bool:
+    """Is this a nested TOML table — i.e. a configured provider?
+
+    Deliberately not `isinstance(value, dict)`. `st.secrets` hands back
+    `AttrDict`, Streamlit's own mapping type, which is **not** a `dict`
+    subclass. So the dict check was false for every real provider while being
+    true for every test fixture, which passed plain dicts. The result on the
+    deployed site: no providers found, the unnamed fallback used, and
+    `st.login()` called with nothing to log in *to* — a StreamlitAuthError on
+    the first click, in production, having passed locally.
+
+    Duck-typing on the mapping protocol instead. Anything that behaves like a
+    table is one, whichever library produced it — which is the property that
+    was actually meant all along.
+    """
+    # The string guard is redundant today — a `str` has `__getitem__` but no
+    # `keys`, so it fails the second test anyway, and mutation testing duly
+    # showed that deleting this line changes nothing. It's kept because it
+    # stops being redundant the moment that `and` becomes an `or`, and the
+    # failure it prevents is a "Sign in with Cookie Secret" button next to the
+    # real one. Cheap insurance on a line nobody will reread.
+    if isinstance(value, str):
+        return False
+    return isinstance(value, Mapping) or (
+        hasattr(value, "keys") and hasattr(value, "__getitem__"))
+
+
 def sign_in_options(secrets) -> list:
     """[(provider_name, button_label)] for the sign-in screen.
 
@@ -104,7 +132,7 @@ def sign_in_options(secrets) -> list:
 
     providers = [
         name for name, value in auth_config.items()
-        if name not in shared and isinstance(value, dict)
+        if name not in shared and _is_table(value)
     ]
     if not providers:
         return [DEFAULT_PROVIDER]

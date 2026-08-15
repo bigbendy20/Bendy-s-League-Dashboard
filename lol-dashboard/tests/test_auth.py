@@ -229,3 +229,103 @@ class TestSignInOptions:
                 raise FileNotFoundError("no secrets.toml")
 
         assert auth.sign_in_options(Exploding()) == [auth.DEFAULT_PROVIDER]
+
+
+class _AttrDict:
+    """A stand-in for `streamlit.runtime.secrets.AttrDict`.
+
+    The important property, and the whole reason this class exists: it is a
+    `Mapping` but **not** a `dict` subclass. That is exactly what `st.secrets`
+    returns for a nested TOML table, and it is what broke the deployed site
+    while every test here passed — because every test here passed a plain
+    `dict`, which agrees with a `isinstance(value, dict)` check no matter
+    whether that check is the right one.
+    """
+
+    def __init__(self, data):
+        self._data = dict(data)
+
+    def __getitem__(self, key):
+        value = self._data[key]
+        return _AttrDict(value) if isinstance(value, dict) else value
+
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError as exc:
+            raise AttributeError(key) from exc
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return len(self._data)
+
+    def keys(self):
+        return self._data.keys()
+
+    def items(self):
+        return [(k, self[k]) for k in self._data]
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+
+class TestSecretsThatAreNotPlainDicts:
+    """Providers must be found in whatever `st.secrets` actually hands back.
+
+    Deployed, the first click on Sign in raised StreamlitAuthError: no
+    providers were detected, so the unnamed default was used and `st.login()`
+    was called with nothing to log in to. Locally it worked. The difference
+    was the *type* of the config object, which no test had ever varied.
+    """
+
+    def test_a_mapping_that_is_not_a_dict_still_yields_its_providers(self):
+        secrets = _AttrDict({
+            "auth": {
+                "redirect_uri": "https://example.streamlit.app/oauth2callback",
+                "cookie_secret": "abc",
+                "auth0": {"client_id": "x", "client_secret": "y",
+                          "server_metadata_url": "https://z/.well-known/openid-configuration"},
+            }
+        })
+        assert auth.sign_in_options(secrets) == [("auth0", "Sign in with Auth0")]
+
+    def test_the_unnamed_fallback_is_not_used_when_a_provider_exists(self):
+        """The specific failure. Falling back here is worse than useless:
+        `st.login()` with no argument needs an unnamed `[auth]` provider,
+        which a config with `[auth.auth0]` does not have — so it raises
+        rather than degrading."""
+        secrets = _AttrDict({"auth": {"cookie_secret": "abc",
+                                      "auth0": {"client_id": "x"}}})
+        assert auth.DEFAULT_PROVIDER not in auth.sign_in_options(secrets)
+
+    def test_shared_settings_are_still_not_providers(self):
+        """`redirect_uri` and `cookie_secret` are strings, so the duck-typed
+        check must not promote them — a "Sign in with Cookie Secret" button
+        is the failure in the other direction."""
+        secrets = _AttrDict({"auth": {"redirect_uri": "https://x/cb",
+                                      "cookie_secret": "abc",
+                                      "expose_tokens": True,
+                                      "auth0": {"client_id": "x"}}})
+        names = [name for name, _ in auth.sign_in_options(secrets)]
+        assert names == ["auth0"]
+
+    def test_several_providers_from_a_mapping(self):
+        secrets = _AttrDict({"auth": {"cookie_secret": "abc",
+                                      "google": {"client_id": "g"},
+                                      "microsoft": {"client_id": "m"}}})
+        assert [n for n, _ in auth.sign_in_options(secrets)] == ["google", "microsoft"]
+
+
+class TestIsTable:
+    def test_plain_dicts_and_mappings_both_count(self):
+        assert auth._is_table({"a": 1})
+        assert auth._is_table(_AttrDict({"a": 1}))
+
+    def test_scalars_do_not(self):
+        for value in ("a string", 42, True, None, ["a", "list"]):
+            assert not auth._is_table(value), value
