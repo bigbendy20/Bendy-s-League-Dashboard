@@ -1,0 +1,15 @@
+.env
+data/*.json
+data/*.db
+data/matches/*.json
+data/timelines/*.json
+highlight_replays/*.rofl
+__pycache__/
+*.pyc
+.venv/
+
+# The roster of tracked players. Public repo — see roster.example.txt.
+roster.txt
+
+# Streamlit secrets: OAuth credentials and the invite list.
+.streamlit/secrets.toml

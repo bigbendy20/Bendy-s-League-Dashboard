@@ -1,0 +1,28 @@
+# 1.46+ for st.navigation(position="top") — the tabs across the top of the
+# app. Note 1.52.0 specifically had a bug that also drew the nav in the
+# sidebar; that was fixed in a patch release, so avoid pinning to 1.52.0.
+# The [auth] extra pulls in Authlib, which `st.login()` requires. Plain
+# `streamlit` installs and imports fine without it and then fails at the
+# moment someone tries to sign in — i.e. only in production, only for a real
+# user. Requesting the extra here is what stops that.
+streamlit[auth]>=1.46
+# 3.3.0+ for the puuid-based champion-mastery endpoints (by_puuid); older
+# releases only had the deprecated summoner-id versions.
+riotwatcher>=3.3.0
+pandas>=2.2
+# python-dotenv was here until `env_file.py` took over reading `.env`. Both
+# the app and the CLI jobs now use that one loader, so the library had no
+# remaining caller — and dropping it means the refresher on Actions needs
+# nothing beyond riotwatcher, pandas and the Postgres driver.
+plotly>=5.22
+requests>=2.32
+Pillow>=10.0
+
+# Optional, for running the test suite (`pytest` from this folder). Not
+# needed to run the dashboard — and `python tests/run_tests.py` runs the
+# same tests with no extra install at all.
+# pytest>=8.0
+
+# Postgres driver for the hosted store. Not needed to run locally against the
+# file store, but Streamlit Community Cloud installs from this file.
+psycopg[binary]>=3.1

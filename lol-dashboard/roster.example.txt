@@ -1,0 +1,13 @@
+# Who the site tracks. Copy this to `roster.txt` and edit.
+#
+# `roster.txt` is gitignored on purpose: this repo is public, and a published
+# list of your friends' accounts is a different thing from those accounts
+# being individually lookupable. Names live in your local file and the
+# database, never in the repository.
+#
+# One Riot ID per line. Everything after `=` is an optional display name,
+# and `[platform/continental]` overrides the default NA routing.
+
+# YourName#NA1
+# Two Word Name#Scout = Scout
+# SomeFriend#EUW [euw1/europe]

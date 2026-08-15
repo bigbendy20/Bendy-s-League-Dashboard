@@ -1,0 +1,47 @@
+# Keeps every profile's match data current, outside the web app.
+#
+# This runs here rather than as a thread inside Streamlit for two reasons:
+# Community Cloud sleeps apps after 12 quiet hours, which would stop an
+# in-app refresher overnight; and the app holds a render lock while drawing
+# a page, so a long fetch on the request path would block every viewer.
+#
+# Cost: Actions is free and unlimited on public repositories. On a private
+# repo the free allowance is 2,000 minutes a month and Actions bills per job
+# rounded up to the whole minute — so this schedule (288 runs/day) would cost
+# ~8,600 minutes and is only viable because the repo is public.
+name: Refresh League data
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # every 5 minutes; GitHub often runs it late
+  workflow_dispatch:         # manual trigger, for testing
+
+concurrency:
+  # Two overlapping runs would double-spend the shared Riot rate limit.
+  # `cancel-in-progress: false` because a run that's mid-fetch should finish
+  # and commit what it has rather than be killed by the next tick.
+  group: refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10      # a normal cycle is seconds; this catches hangs
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        # Only what the refresher needs — no Streamlit, no plotly. Keeps the
+        # job to a few seconds, which matters when it runs 288 times a day.
+        run: pip install riotwatcher pandas psycopg[binary]
+
+      - name: Refresh
+        env:
+          RIOT_API_KEY: ${{ secrets.RIOT_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python lol-dashboard/refresh_job.py

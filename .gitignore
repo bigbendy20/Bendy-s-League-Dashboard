@@ -1,0 +1,9 @@
+# The development log. Excluded from the public repo because it names the
+# people on the roster and reports their game counts and date ranges — the
+# same information `roster.txt` is gitignored to protect. The repo is public
+# only so GitHub Actions is free, not to publish anything about them.
+#
+# It is still written and maintained locally, as always. If you'd rather
+# publish it, say so and the names can be swapped for the invented ones the
+# tests now use.
+DEV_LOG.md
