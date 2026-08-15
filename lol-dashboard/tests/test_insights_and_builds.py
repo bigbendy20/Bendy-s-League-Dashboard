@@ -8,7 +8,6 @@ from stats import (
     opening_build_win_rate,
     performance_by_hour,
     performance_by_weekday,
-    skin_usage,
     win_rate_after_result,
 )
 
@@ -129,14 +128,8 @@ class TestBuildAndSkinUsage:
         assert len(builds) == 1
         assert builds.iloc[0]["games"] == 4
 
-    def test_skin_usage(self, sample_df):
-        skins = skin_usage(sample_df, "Ahri")
-        assert skins.iloc[0]["skin_id"] == 0
-        assert skins.iloc[0]["games"] == 4
-
     def test_unplayed_champion_returns_empty(self, sample_df):
         assert build_win_rate(sample_df, "Teemo").empty
-        assert skin_usage(sample_df, "Teemo").empty
 
 
 class TestTimeBasedStats:

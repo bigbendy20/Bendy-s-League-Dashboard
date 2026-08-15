@@ -18,7 +18,6 @@ import ddragon
 import insights
 import rank_history
 import recap
-import replays
 import stats
 # A plain constant, so it comes in as a normal import rather than through
 # the runtime binding — that only carries callables.
@@ -44,13 +43,20 @@ def page_home():
             ("Ranked W/L", f"{solo_wins}W {solo_losses}L"),
             ("LP", solo["leaguePoints"]),
         ]
+        # The goal sits with the rank because that's the number it's about.
+        # Per profile, so a friend's page shows theirs — it used to be one
+        # value from `.env` shown identically on everyone's board.
+        if GOAL_TIER:
+            goal_text = (GOAL_TIER.title() if GOAL_TIER in rank_history.APEX_TIERS
+                         else f"{GOAL_TIER.title()} {GOAL_RANK}".strip())
+            hero_stats.append(("Goal", goal_text))
         hero_subtitle = f"Ranked Solo/Duo this season · viewing {queue_filter}"
     else:
         # Unranked or off-season: fall back to the loaded history, labelled
         # honestly rather than presenting it as a ranked record.
         hero_stats = [("Games", games), (f"Win Rate ({queue_filter})", f"{wr}%")]
         hero_subtitle = f"No ranked Solo/Duo data yet · viewing {queue_filter}"
-    render_hero(APP_TITLE, hero_subtitle, stats=hero_stats)
+    render_hero(PROFILE_TITLE, hero_subtitle, stats=hero_stats)
 
     # Active streak callout — distinct from the retrospective "win rate after
     # a loss" stat further down. Only surfaced at 3+, since a 1-2 game run is
@@ -124,8 +130,10 @@ def page_home():
         icon="🌟", featured=True,
     ):
         render_highlight_reel(filtered_df)
-        st.markdown("**Find replays for these games**")
-        render_replay_finder(filtered_df)
+        # The replay finder lived here. It matched games against `.rofl` files
+        # in a folder on the machine running the app — which was the player's
+        # own machine when this was a local tool, and is a Streamlit container
+        # now. Nothing it could find would belong to the person looking at it.
 
     col_l2, col_r2 = st.columns(2)
     with col_l2:
@@ -986,24 +994,17 @@ def page_deepdive():
                 "differ by role — pick one above for a comparable set."
             )
 
-    with section_card("dd-skins-builds", "Skins & Builds", icon="🎨"):
-        st.markdown("**Most played skins**")
-        skins_df = skin_usage(scoped_df, selected)
-        if skins_df.empty:
-            st.caption("No skin data.")
-        else:
-            skin_names = get_skin_names(selected, version)
-            top_skins = skins_df.head(4)
-            cols = st.columns(len(top_skins))
-            for i, (_, row) in enumerate(top_skins.iterrows()):
-                skin_num = int(row["skin_id"])
-                name = skin_names.get(skin_num, "Classic" if skin_num == 0 else f"Skin {skin_num}")
-                thumb = ddragon.champion_splash_url(selected, skin_num)
-                cols[i].image(
-                    thumb, caption=f"{name} — {row['games']}g ({row['win_rate']}%)",
-                    use_container_width=True,
-                )
-
+    # "Most played skins" used to sit here. It was removed rather than fixed:
+    # match-v5 carries no skin field at all. Checked against 4,000 real
+    # participant records — not one had any key containing "skin" — so
+    # `participant.get("skinId", 0)` returned 0 every time and the card
+    # confidently reported "Classic, 100%" for every champion anyone had ever
+    # played. The test fixture invented a `skinId` of 0, so the tests agreed.
+    #
+    # There is no other source: the skin isn't in the timeline either, and
+    # spectator-v5 only knows about games in progress. Showing nothing beats
+    # showing a number that was never measured.
+    with section_card("dd-builds", "Builds", icon="🎨"):
         st.markdown("**Most common final builds**")
         builds_df = build_win_rate(scoped_df, selected)
         if builds_df.empty:
@@ -1525,3 +1526,172 @@ def page_other_modes():
     with section_card("om-recent", "Recent Games", icon="🕹️"):
         recent_games_feed(sub.sort_values("game_creation", ascending=False).head(10))
 
+
+
+def page_tilt():
+    """Whether this player's results depend on how the last game went.
+
+    Every card here is a comparison between two sets of the same player's
+    games, shown with both sample sizes and an explicit verdict on whether
+    the gap clears significance. That framing is the point: "tilt" is easy to
+    feel and hard to demonstrate, and a dashboard that shows 47% next to 51%
+    without saying "that's noise" is inventing a problem to solve.
+
+    Four comparisons on this page, so `separated()` is called with
+    `comparisons=4` — a Bonferroni correction. Without it, testing four
+    things at 5% each means a roughly one-in-five chance of calling something
+    real when nothing is.
+    """
+    render_hero("Tilt", "Does the last game change the next one?")
+
+    scoped = core_only(filtered_df) if not filtered_df.empty else filtered_df
+    if len(scoped) < 50:
+        st.info(
+            f"Only {len(scoped)} Summoner's Rift games here. Tilt patterns need "
+            "a few hundred before the differences mean anything — this fills in "
+            "as the board collects more."
+        )
+        return
+
+    COMPARISONS = 4
+
+    def verdict(a_wins, a_games, b_wins, b_games, worse_label, better_label):
+        """One honest sentence about a two-way split."""
+        if not a_games or not b_games:
+            return "Not enough games on one side to compare."
+        a_rate, b_rate = a_wins / a_games * 100, b_wins / b_games * 100
+        gap = a_rate - b_rate
+        if separated(a_wins, a_games, b_wins, b_games, comparisons=COMPARISONS):
+            direction = worse_label if gap < 0 else better_label
+            return f"**{direction}** — {abs(gap):.1f} points, and the gap clears significance."
+        return (f"{abs(gap):.1f} point difference, which is within noise for "
+                f"{a_games} vs {b_games} games. No effect worth acting on.")
+
+    col_l, col_r = st.columns(2)
+
+    with col_l:
+        with section_card(
+            "tilt-streak", "After a Losing Streak",
+            "The 'should I stop' question, answered from your own games.",
+            icon="🔥", featured=True,
+        ):
+            streaks = losing_streak_effect(scoped)
+            if streaks.empty:
+                st.caption("Not enough games yet.")
+            else:
+                baseline = streaks[streaks["after"] == "After a win"]
+                st.dataframe(
+                    streaks.rename(columns={
+                        "after": "Situation", "games": "Games",
+                        "wins": "Wins", "win_rate": "Win Rate",
+                    }),
+                    hide_index=True, use_container_width=True,
+                    column_config={"Win Rate": st.column_config.NumberColumn(format="%.1f%%")},
+                )
+                worst = streaks[streaks["after"] != "After a win"]
+                if not baseline.empty and not worst.empty:
+                    b = baseline.iloc[0]
+                    w = worst.sort_values("win_rate").iloc[0]
+                    st.markdown(verdict(
+                        int(w["wins"]), int(w["games"]),
+                        int(b["wins"]), int(b["games"]),
+                        f"You play worse {w['after'].lower()}",
+                        f"You play better {w['after'].lower()}",
+                    ))
+                st.caption(
+                    "Read against the 'after a win' row — a 47% win rate means "
+                    "nothing until you know what you do otherwise."
+                )
+
+    with col_r:
+        with section_card(
+            "tilt-requeue", "Requeue vs. Break",
+            "After a loss, does going straight back in cost you?",
+            icon="⏱️",
+        ):
+            requeue = quick_requeue_effect(scoped)
+            qg, qw = requeue["quick"][0], requeue["quick"][1]
+            bg, bw = requeue["break"][0], requeue["break"][1]
+            if not qg or not bg:
+                st.caption("Not enough back-to-back games after losses yet.")
+            else:
+                metric_grid([
+                    (f"Requeued <{requeue['minutes']}min", f"{qw / qg * 100:.1f}%"),
+                    ("Took a break", f"{bw / bg * 100:.1f}%"),
+                ], cols_per_row=2)
+                st.caption(f"{qg} games vs {bg} games, both following a loss.")
+                st.markdown(verdict(
+                    qw, qg, bw, bg,
+                    "Requeueing fast costs you", "Requeueing fast suits you",
+                ))
+
+    col_l2, col_r2 = st.columns(2)
+
+    with col_l2:
+        with section_card(
+            "tilt-session", "Deep Into a Session",
+            "Win rate by how many games you're into a sitting.",
+            icon="🪫",
+        ):
+            depth = session_depth_effect(scoped)
+            if depth.empty:
+                st.caption("Not enough games yet.")
+            else:
+                st.dataframe(
+                    depth.rename(columns={
+                        "depth": "Session position", "games": "Games",
+                        "wins": "Wins", "win_rate": "Win Rate",
+                    }),
+                    hide_index=True, use_container_width=True,
+                    column_config={"Win Rate": st.column_config.NumberColumn(format="%.1f%%")},
+                )
+                first = depth.iloc[0]
+                last = depth.iloc[-1]
+                st.markdown(verdict(
+                    int(last["wins"]), int(last["games"]),
+                    int(first["wins"]), int(first["games"]),
+                    "You fade late in a session", "You warm up as you play",
+                ))
+                st.caption(
+                    "Not a controlled comparison: long sessions happen partly "
+                    "*because* they were going badly, so some of any drop is "
+                    "chasing losses rather than fatigue. Worth noticing, not "
+                    "worth treating as a cause."
+                )
+
+    with col_r2:
+        with section_card(
+            "tilt-hours", "Your Worst Hours",
+            "When you actually play badly, with enough games to mean it.",
+            icon="🕐",
+        ):
+            hours = worst_hours(scoped)
+            if hours.empty:
+                st.caption(
+                    "No hour has 20+ games yet. Fewer than that and the worst-"
+                    "looking hour is just the emptiest one."
+                )
+            else:
+                show = hours.head(5)[["label", "games", "wins", "win_rate"]]
+                st.dataframe(
+                    show.rename(columns={
+                        "label": "Hour", "games": "Games",
+                        "wins": "Wins", "win_rate": "Win Rate",
+                    }),
+                    hide_index=True, use_container_width=True,
+                    column_config={"Win Rate": st.column_config.NumberColumn(format="%.1f%%")},
+                )
+                overall_games, overall_wins, _ = overall_win_rate(scoped)
+                worst_hour = hours.iloc[0]
+                st.markdown(verdict(
+                    int(worst_hour["wins"]), int(worst_hour["games"]),
+                    overall_wins - int(worst_hour["wins"]),
+                    overall_games - int(worst_hour["games"]),
+                    f"You're genuinely worse at {worst_hour['label']}",
+                    f"You're better at {worst_hour['label']}",
+                ))
+                st.caption(
+                    "Compared against your other hours, not against your "
+                    "overall record — which includes these games and would "
+                    "flatten the difference."
+                )

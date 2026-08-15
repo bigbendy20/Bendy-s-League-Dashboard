@@ -127,3 +127,41 @@ class TestIsOwnProfile:
         profile that isn't theirs."""
         assert not profiles.is_own_profile(BENDY, "")
         assert not profiles.is_own_profile(NO_EMAIL, "")
+
+
+class TestClimbGoalIsPerProfile:
+    """The goal belongs to the player, not to the deployment.
+
+    It used to be `GOAL_TIER`/`GOAL_RANK` in `.env`: one value for the whole
+    site, so every friend's page displayed Bendy's target as though it were
+    theirs. On Streamlit Cloud it was also unsettable — `.env` isn't writable
+    there and wouldn't survive a restart if it were.
+    """
+
+    def test_a_profile_carries_its_own_goal(self):
+        p = profiles.make_profile("p1", "Bendy", "NA1", goal_tier="diamond",
+                                  goal_rank="iv")
+        assert p["goal_tier"] == "DIAMOND"
+        assert p["goal_rank"] == "IV"
+
+    def test_no_goal_is_none_not_an_empty_string(self):
+        """`if not GOAL_TIER` decides whether the card renders at all, and an
+        empty string from a blank form field must read the same as never
+        having set one."""
+        p = profiles.make_profile("p1", "Bendy", "NA1")
+        assert p["goal_tier"] is None
+        assert profiles.make_profile("p2", "X", "NA1", goal_tier="  ")["goal_tier"] is None
+
+    def test_two_profiles_hold_different_goals(self):
+        """The distinguishing case: with one shared setting this passes only
+        by accident, because both would read back whatever was written last."""
+        a = profiles.make_profile("p1", "Bendy", "NA1", goal_tier="MASTER")
+        b = profiles.make_profile("p2", "Friend", "NA1", goal_tier="SILVER",
+                                  goal_rank="II")
+        assert (a["goal_tier"], b["goal_tier"]) == ("MASTER", "SILVER")
+
+    def test_the_goal_fields_are_part_of_the_record(self):
+        """`PROFILE_FIELDS` drives the SQL schema, the upsert and the row
+        decoder. A field missing from it saves and then reads back absent."""
+        assert "goal_tier" in profiles.PROFILE_FIELDS
+        assert "goal_rank" in profiles.PROFILE_FIELDS

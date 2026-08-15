@@ -22,7 +22,6 @@ import insights
 import live_tips
 import rank_history
 import recap
-import replays
 import stats
 from themes import hex_to_rgb
 from stats import *  # noqa: F403 - the stats layer is this app's vocabulary
@@ -712,45 +711,12 @@ def render_highlight_reel(data: pd.DataFrame):
         )
 
 
-HIGHLIGHT_REPLAY_DIR = Path(__file__).parent / "highlight_replays"
-
-
-def render_replay_finder(data: pd.DataFrame):
-    highlights = standout_games(data)
-    if not highlights:
-        st.caption("Not enough games yet to look for replays.")
-        return
-
-    games_for_matching = [
-        {
-            "match_id": h["match_id"],
-            "label": h["label"],
-            "champion": h["row"]["champion"],
-            "date_str": h["row"]["game_creation"].strftime("%Y-%m-%d"),
-        }
-        for h in highlights
-    ]
-    replay_folder = replays.get_replay_folder()
-    st.caption(
-        f"Looking in `{replay_folder}` for saved `.rofl` replays matching these games. Only finds "
-        "replays the League client already saved locally — there's no way to download replays "
-        "remotely, and Riot's replay servers only keep a game available for about two weeks."
-    )
-    if st.button("Find & organize replays for these games"):
-        matched = replays.match_replays_to_games(games_for_matching, replay_folder)
-        copied = replays.copy_matched_replays(matched, HIGHLIGHT_REPLAY_DIR)
-        found = [c for c in copied if c["copied_to"]]
-        missing = [c for c in copied if not c["copied_to"]]
-        if found:
-            st.success(f"Found {len(found)} replay(s) — copied to `highlight_replays/`:")
-            for c in found:
-                st.markdown(f"- **{c['label']}** — {c['champion']} ({c['date_str']}) → `{c['copied_to'].name}`")
-        if missing:
-            st.caption(f"No local replay found for {len(missing)} game(s):")
-            for c in missing:
-                st.caption(f"· {c['label']} — {c['champion']} ({c['date_str']})")
-        if not found and not missing:
-            st.caption("No games to check.")
+# The replay finder lived here. It matched standout games against `.rofl`
+# files on the machine running the app — fine for a local tool, meaningless
+# hosted: the container's disk has no replays, and any it did have wouldn't
+# belong to whoever is looking at the page. Riot also can't serve replays
+# remotely, and keeps a game replayable for only about two weeks, so there is
+# no hosted version of this feature to build.
 
 
 # ---------------------------------------------------------------------------

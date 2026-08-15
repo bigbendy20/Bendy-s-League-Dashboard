@@ -13,7 +13,6 @@ import insights
 import profiles
 import rank_history
 import recap
-import replays
 from riot_client import RiotClient
 from themes import DEFAULT_ACCENT, get_tier_colors, hex_to_rgb, readable_accents
 import stats
@@ -40,6 +39,10 @@ from layout import metric_grid, percent_table, render_hero, section_card
 env_file.load(env_file.path_for(__file__))
 
 APP_TITLE = "Bendy's League Board"
+# The browser tab keeps the site's name; the hero card is retitled per profile
+# further down, once the active profile is known. `PROFILE_TITLE` is what the
+# pages actually render — a fixed name at the top of someone else's page reads
+# like you're still looking at your own.
 FAVICON_PATH = os.path.join(os.path.dirname(__file__), "assets", "favicon.png")
 
 st.set_page_config(
@@ -77,11 +80,6 @@ GRID_COLOR = "rgba(255,255,255,0.10)" if dark_mode else "rgba(0,0,0,0.10)"
 @st.cache_data(ttl=86400)
 def get_ddragon_version() -> str:
     return ddragon.get_latest_version()
-
-
-@st.cache_data(ttl=86400)
-def get_skin_names(champion: str, version: str) -> dict:
-    return ddragon.get_champion_skins(champion, version)
 
 
 @st.cache_data(ttl=86400)
@@ -237,12 +235,25 @@ TAG_LINE = (active_profile.get("tag_line") or "").strip().lstrip("#")
 PLATFORM_REGION = (active_profile.get("platform_region") or "na1").strip()
 CONTINENTAL_REGION = (active_profile.get("continental_region") or "americas").strip()
 viewing_own_profile = profiles.is_own_profile(active_profile, signed_in_email)
+
+# What the hero card says. Whoever's page you're on, their Riot ID is the
+# title — the site name stays in the browser tab. On a multi-profile board a
+# fixed "Bendy's League Board" above someone else's stats actively misleads:
+# the numbers change when you switch profiles and the heading doesn't.
+PROFILE_TITLE = f"{GAME_NAME}#{TAG_LINE}" if GAME_NAME and TAG_LINE else APP_TITLE
+
 try:
     MATCH_HISTORY_TARGET = int(os.getenv("MATCH_HISTORY_TARGET", "1000"))
 except ValueError:
     MATCH_HISTORY_TARGET = 1000
-GOAL_TIER = os.getenv("GOAL_TIER", "").strip().upper()
-GOAL_RANK = os.getenv("GOAL_RANK", "").strip().upper()
+
+# The climb goal lives on the profile record, not in the environment. It was
+# `GOAL_TIER`/`GOAL_RANK` from `.env` — one goal for the whole site, which on
+# a shared board meant everyone saw Bendy's target on their own page, and on
+# Streamlit Cloud meant nobody could change it at all, since `.env` isn't
+# writable there and wouldn't survive a restart if it were.
+GOAL_TIER = (active_profile.get("goal_tier") or "").strip().upper()
+GOAL_RANK = (active_profile.get("goal_rank") or "").strip().upper()
 
 
 def update_env_value(key: str, value: str) -> None:
@@ -328,7 +339,8 @@ def render_onboarding_form():
 # waiting for the single bind before navigation — otherwise the very first
 # thing a new user sees raises NameError on `HERO_CHAMPION`.
 BASE_BINDING = dict(
-    APP_TITLE=APP_TITLE, HERO_CHAMPION=HERO_CHAMPION, hero_icon_url=hero_icon_url,
+    APP_TITLE=APP_TITLE, PROFILE_TITLE=APP_TITLE,
+    HERO_CHAMPION=HERO_CHAMPION, hero_icon_url=hero_icon_url,
     version=version,
     accent=accent, accent2=accent2, accent_rgb=accent_rgb, accent2_rgb=accent2_rgb,
     accent_text=accent_text, accent2_text=accent2_text, rank_label=rank_label,
@@ -336,7 +348,7 @@ BASE_BINDING = dict(
     TEXT_COLOR=TEXT_COLOR, GRID_COLOR=GRID_COLOR,
     update_env_value=update_env_value,
     get_champions_catalog=get_champions_catalog, get_items_catalog=get_items_catalog,
-    get_runes_catalog=get_runes_catalog, get_skin_names=get_skin_names,
+    get_runes_catalog=get_runes_catalog,
     get_summoner_spells_catalog=get_summoner_spells_catalog,
     render_hero=render_hero, section_card=section_card,
     percent_table=percent_table, metric_grid=metric_grid,
@@ -396,7 +408,7 @@ with ctrl_account:
     st.markdown(
         f'<div class="control-account"><b>{GAME_NAME}#{TAG_LINE}</b>'
         f'<span class="control-meta">{PLATFORM_REGION.upper()} · {CONTINENTAL_REGION} · '
-        f'up to {MATCH_HISTORY_TARGET} matches · '
+        f'{len(st.session_state.get("df", [])):,} matches · '
         f'updated {relative_time(st.session_state.get("last_updated"))}'
         f'{" · " + st.session_state.poll_status if st.session_state.get("poll_status") else ""}'
         f'</span></div>',
@@ -483,17 +495,6 @@ with ctrl_settings:
             update_env_value("MATCH_HISTORY_TARGET", str(int(new_target)))
             st.success("Saved — click Refresh to apply.")
 
-        current_replay_folder = os.getenv("REPLAY_FOLDER", "").strip() or str(replays.default_replay_folder())
-        new_replay_folder = st.text_input(
-            "Replay folder",
-            value=current_replay_folder,
-            help="Where your League client saves .rofl replay files. Only change "
-                 "this if yours isn't in the default Documents location.",
-        )
-        if st.button("Save replay folder"):
-            update_env_value("REPLAY_FOLDER", new_replay_folder)
-            st.success("Saved.")
-
         st.divider()
         st.caption("Climb goal")
         goal_tier_options = rank_history.TIER_ORDER
@@ -509,10 +510,21 @@ with ctrl_settings:
             division_options = list(rank_history.DIVISION_ORDER.keys())
             division_index = division_options.index(GOAL_RANK) if GOAL_RANK in division_options else 3  # IV
             new_goal_rank = st.selectbox("Goal division", division_options, index=division_index)
-        if st.button("Save climb goal"):
-            update_env_value("GOAL_TIER", new_goal_tier)
-            update_env_value("GOAL_RANK", new_goal_rank)
+        if not viewing_own_profile:
+            st.caption(
+                f"This is {GAME_NAME}'s goal. You can only change your own — "
+                "switch to your profile to set yours."
+            )
+        elif st.button("Save climb goal"):
+            # Written to the profile record, so it follows the player rather
+            # than the deployment, and survives a Streamlit Cloud restart —
+            # `.env` is neither writable nor persistent there.
+            updated = dict(active_profile)
+            updated["goal_tier"] = new_goal_tier
+            updated["goal_rank"] = new_goal_rank
+            data_store.upsert_profile(updated)
             st.success("Saved.")
+            st.rerun()
 
 for key, default in [
     ("df", pd.DataFrame()),
@@ -624,7 +636,7 @@ def fetch_everything():
 
 
 if refresh_clicked or not st.session_state.loaded_once:
-    with st.spinner(f"Loading up to {MATCH_HISTORY_TARGET} matches..."):
+    with st.spinner("Loading match history..."):
         ok, err = fetch_everything()
     st.session_state.loaded_once = True
     if not ok:
@@ -777,7 +789,8 @@ PAGE_BINDING = dict(
     puuid=puuid, client=client, version=version, use_cache=use_cache,
     queue_filter=queue_filter,
     # Identity / config
-    APP_TITLE=APP_TITLE, GAME_NAME=GAME_NAME, TAG_LINE=TAG_LINE,
+    APP_TITLE=APP_TITLE, PROFILE_TITLE=PROFILE_TITLE,
+    GAME_NAME=GAME_NAME, TAG_LINE=TAG_LINE,
     HERO_CHAMPION=HERO_CHAMPION, hero_icon_url=hero_icon_url,
     GOAL_TIER=GOAL_TIER, GOAL_RANK=GOAL_RANK,
     MATCH_HISTORY_TARGET=MATCH_HISTORY_TARGET,
@@ -789,7 +802,7 @@ PAGE_BINDING = dict(
     TEXT_COLOR=TEXT_COLOR, GRID_COLOR=GRID_COLOR,
     # Cached Data Dragon lookups
     get_champions_catalog=get_champions_catalog, get_items_catalog=get_items_catalog,
-    get_runes_catalog=get_runes_catalog, get_skin_names=get_skin_names,
+    get_runes_catalog=get_runes_catalog,
     get_summoner_spells_catalog=get_summoner_spells_catalog,
     # Cross-module UI helpers
     render_hero=render_hero, section_card=section_card,
@@ -859,6 +872,7 @@ PAGES = [
     st.Page(views.page_compare, title="Compare", icon="⚔️"),
     st.Page(views.page_roles, title="Roles", icon="🛡️"),
     st.Page(views.page_duo, title="Teammates", icon="🤝"),
+    st.Page(views.page_tilt, title="Tilt", icon="🔥"),
     st.Page(views.page_other_modes, title="Other Modes", icon="🎲"),
     st.Page(views.page_raw, title="Raw Data", icon="🗂️"),
 ]

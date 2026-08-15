@@ -41,6 +41,7 @@ from pathlib import Path
 import pandas as pd
 
 import env_file
+import profiles as _profiles
 
 
 DEFAULT_LOCAL_DB = "data/board.db"
@@ -315,13 +316,30 @@ class SqlStore:
                 platform_region   TEXT,
                 continental_region TEXT,
                 display_name      TEXT,
-                email             TEXT
+                email             TEXT,
+                goal_tier         TEXT,
+                goal_rank         TEXT
             )
             """
         )
         # `email` is how a signed-in Google account maps to a League profile.
         # Nullable, because a profile can exist before its owner has ever
         # logged in — the backfill shouldn't wait on that.
+        # `CREATE TABLE IF NOT EXISTS` does nothing to a table that already
+        # exists, so a new column has to be added explicitly or the deployed
+        # database keeps the old shape and every SELECT naming it fails. Both
+        # backends support `ADD COLUMN IF NOT EXISTS`; wrapped anyway, because
+        # an older SQLite would raise and a failed migration must not stop the
+        # app from opening a database that is otherwise fine.
+        for column in ("goal_tier", "goal_rank"):
+            try:
+                cur.execute(f"ALTER TABLE profiles ADD COLUMN IF NOT EXISTS {column} TEXT")
+            except Exception:
+                try:
+                    cur.execute(f"ALTER TABLE profiles ADD COLUMN {column} TEXT")
+                except Exception:
+                    pass          # already present
+
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS rank_snapshots (
@@ -406,8 +424,7 @@ class SqlStore:
         """Add or update a profile. Idempotent, so a refresher can call it
         every cycle without checking first."""
         cur = self.conn.cursor()
-        columns = ("puuid", "game_name", "tag_line", "platform_region",
-                   "continental_region", "display_name", "email")
+        columns = _profiles.PROFILE_FIELDS
         values = tuple(profile.get(c) for c in columns)
         placeholders = ", ".join([self.p] * len(columns))
         updates = ", ".join(f"{c} = excluded.{c}" for c in columns[1:])
@@ -421,8 +438,7 @@ class SqlStore:
     def list_profiles(self) -> list:
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT puuid, game_name, tag_line, platform_region, "
-            "continental_region, display_name, email FROM profiles "
+            f"SELECT {', '.join(_profiles.PROFILE_FIELDS)} FROM profiles "
             "ORDER BY LOWER(COALESCE(display_name, game_name))"
         )
         return [self._profile_row(r) for r in cur.fetchall()]
@@ -430,9 +446,8 @@ class SqlStore:
     def get_profile(self, puuid: str):
         cur = self.conn.cursor()
         cur.execute(
-            f"SELECT puuid, game_name, tag_line, platform_region, "
-            f"continental_region, display_name, email FROM profiles "
-            f"WHERE puuid = {self.p}",
+            f"SELECT {', '.join(_profiles.PROFILE_FIELDS)} "
+            f"FROM profiles WHERE puuid = {self.p}",
             (puuid,),
         )
         row = cur.fetchone()
@@ -440,9 +455,15 @@ class SqlStore:
 
     @staticmethod
     def _profile_row(row) -> dict:
-        keys = ("puuid", "game_name", "tag_line", "platform_region",
-                "continental_region", "display_name", "email")
-        return dict(zip(keys, row))
+        """Row tuple -> profile dict.
+
+        Keyed off `profiles.PROFILE_FIELDS` rather than a second hand-written
+        list. The two had to agree and nothing checked that they did: adding a
+        column meant editing the schema, the upsert, two SELECTs and this
+        tuple, and forgetting the last one silently drops the value on the way
+        out — the record saves, and reads back without it.
+        """
+        return dict(zip(_profiles.PROFILE_FIELDS, row))
 
     # ---- rank history ----
     def save_rank_snapshot(self, puuid: str, league_entries: list, timestamp=None) -> int:

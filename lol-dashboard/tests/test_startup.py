@@ -775,3 +775,50 @@ class TestTheSiteUsesTheConfiguredDatabase:
         assert "open_store" in called, (
             "app.py builds a store directly instead of using store.open_store, "
             "so DATABASE_URL is ignored and the deployed site reads nothing")
+
+
+class TestTheHeroTitleFollowsTheProfile:
+    """Whose board does the page say it is?
+
+    On a multi-profile site a fixed "Bendy's League Board" above a friend's
+    stats is actively wrong: switch profiles and every number changes while
+    the heading doesn't. The browser tab keeps the site name.
+    """
+
+    ENV = {
+        "RIOT_API_KEY": "RGAPI-test-key", "RIOT_GAME_NAME": "EnvName",
+        "RIOT_TAG_LINE": "ENV", "PLATFORM_REGION": "na1",
+        "CONTINENTAL_REGION": "americas", "HERO_CHAMPION": "",
+    }
+    REGISTERED = [
+        {"puuid": "p1", "game_name": "Bendy", "tag_line": "EUW",
+         "platform_region": "euw1", "continental_region": "europe",
+         "display_name": "Bendy", "email": "bendy@example.com"},
+        {"puuid": "p2", "game_name": "Friend", "tag_line": "KR",
+         "platform_region": "kr", "continental_region": "asia",
+         "display_name": "Friend", "email": "friend@example.com"},
+    ]
+
+    def test_the_title_is_the_active_profiles_riot_id(self):
+        _run_app(self.ENV, seed=_seeded_state(), registered_profiles=self.REGISTERED)
+        assert LAST_GLOBALS.get("PROFILE_TITLE") == "Bendy#EUW"
+
+    def test_it_is_not_the_site_name(self):
+        """The assertion the mutant survives without: a title that reads
+        `APP_TITLE` renders fine and looks reasonable, so only comparing
+        against it catches the regression."""
+        _run_app(self.ENV, seed=_seeded_state(), registered_profiles=self.REGISTERED)
+        assert LAST_GLOBALS.get("PROFILE_TITLE") != LAST_GLOBALS.get("APP_TITLE")
+
+    def test_it_is_not_taken_from_the_environment(self):
+        """`RIOT_GAME_NAME` is deliberately different from every profile, so
+        reading the env instead of the active profile is visible."""
+        _run_app(self.ENV, seed=_seeded_state(), registered_profiles=self.REGISTERED)
+        assert "EnvName" not in LAST_GLOBALS.get("PROFILE_TITLE", "")
+
+    def test_it_falls_back_to_the_site_name_with_no_profile(self):
+        """The onboarding path has no Riot ID yet, and `#` on its own would
+        be a strange thing to put at the top of a page."""
+        env = dict(self.ENV, RIOT_GAME_NAME=None, RIOT_TAG_LINE=None)
+        _run_app(env, seed=_seeded_state())
+        assert LAST_GLOBALS.get("PROFILE_TITLE") == LAST_GLOBALS.get("APP_TITLE")

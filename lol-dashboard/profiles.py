@@ -33,11 +33,18 @@ PROFILE_FIELDS = (
     "continental_region",
     "display_name",
     "email",
+    # The climb goal belongs to the player, not to the deployment. It used to
+    # be GOAL_TIER/GOAL_RANK in `.env`: one goal shared by everyone, shown on
+    # every profile, and unsettable on Streamlit Cloud where `.env` isn't
+    # writable and wouldn't survive a restart.
+    "goal_tier",
+    "goal_rank",
 )
 
 
 def make_profile(puuid, game_name, tag_line, platform_region="na1",
-                 continental_region="americas", display_name=None, email=None) -> dict:
+                 continental_region="americas", display_name=None, email=None,
+                 goal_tier=None, goal_rank=None) -> dict:
     """One profile record, with the display name defaulted to the Riot name."""
     return {
         "puuid": puuid,
@@ -47,6 +54,8 @@ def make_profile(puuid, game_name, tag_line, platform_region="na1",
         "continental_region": continental_region,
         "display_name": display_name or game_name,
         "email": email,
+        "goal_tier": (goal_tier or "").strip().upper() or None,
+        "goal_rank": (goal_rank or "").strip().upper() or None,
     }
 
 

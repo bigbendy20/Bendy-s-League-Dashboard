@@ -431,3 +431,58 @@ class TestNothingIsEverDeleted:
                 for phrase in banned:
                     assert phrase not in lowered, f"{name}: {phrase!r}"
 
+
+
+class TestProfileGoalRoundTrip:
+    def _store(self):
+        return store.SqlStore(sqlite3.connect(":memory:"), paramstyle="?")
+
+    def test_a_goal_survives_save_and_reload(self):
+        import profiles
+
+        s = self._store()
+        s.upsert_profile(profiles.make_profile(
+            "p1", "Bendy", "NA1", goal_tier="DIAMOND", goal_rank="IV"))
+        assert s.get_profile("p1")["goal_tier"] == "DIAMOND"
+        assert [p["goal_rank"] for p in s.list_profiles()] == ["IV"]
+
+    def test_setting_one_profiles_goal_leaves_others_alone(self):
+        import profiles
+
+        s = self._store()
+        s.upsert_profile(profiles.make_profile("p1", "Bendy", "NA1"))
+        s.upsert_profile(profiles.make_profile("p2", "Friend", "NA1"))
+        s.upsert_profile(profiles.make_profile(
+            "p1", "Bendy", "NA1", goal_tier="MASTER"))
+        assert s.get_profile("p1")["goal_tier"] == "MASTER"
+        assert s.get_profile("p2")["goal_tier"] is None
+
+    def test_an_existing_database_gains_the_new_columns(self):
+        """The deployed Postgres was created before these columns existed, and
+        `CREATE TABLE IF NOT EXISTS` does nothing to a table that's already
+        there. Without a migration every SELECT naming them fails and the site
+        shows nothing at all — verified against a copy of the real database
+        before shipping, and pinned here."""
+        conn = sqlite3.connect(":memory:")
+        conn.execute(
+            "CREATE TABLE profiles (puuid TEXT PRIMARY KEY, game_name TEXT, "
+            "tag_line TEXT, platform_region TEXT, continental_region TEXT, "
+            "display_name TEXT, email TEXT)")
+        conn.execute("INSERT INTO profiles (puuid, game_name) VALUES ('p1', 'Bendy')")
+        conn.commit()
+
+        s = store.SqlStore(conn, paramstyle="?")      # opening runs the migration
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(profiles)")}
+        assert {"goal_tier", "goal_rank"} <= columns
+        assert s.get_profile("p1")["game_name"] == "Bendy", "existing rows lost"
+
+    def test_the_row_decoder_follows_the_field_list(self):
+        """Schema, upsert, SELECT and decoder all read from
+        `PROFILE_FIELDS`. When the decoder had its own copy, adding a column
+        meant remembering four places, and missing this one drops the value
+        silently on read."""
+        import profiles
+
+        assert store.SqlStore._profile_row(
+            tuple(range(len(profiles.PROFILE_FIELDS)))
+        ).keys() == dict.fromkeys(profiles.PROFILE_FIELDS).keys()

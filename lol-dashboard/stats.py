@@ -629,7 +629,6 @@ def parse_match(match: dict, puuid: str) -> dict | None:
         "queue_category": queue_category(queue_id),
         "game_length_bucket": game_length_bucket(duration_min),
         "champion": participant.get("championName"),
-        "skin_id": participant.get("skinId", 0),
         "role": participant.get("teamPosition") or participant.get("individualPosition"),
         "role_label": role_label(
             participant.get("teamPosition") or participant.get("individualPosition"),
@@ -850,10 +849,12 @@ def build_win_rate(df: pd.DataFrame, champion: str, min_games: int = 1) -> pd.Da
     return grouped
 
 
-def skin_usage(df: pd.DataFrame, champion: str) -> pd.DataFrame:
-    """Games played (and win rate) per skin for one champion."""
-    subset = df[df["champion"] == champion]
-    return win_rate_by(subset, "skin_id")
+# `skin_usage` was removed, not fixed. match-v5 has no skin field — verified
+# against 4,000 real participant records, none of which carried any key
+# containing "skin" — so the column it grouped by was `.get("skinId", 0)`
+# defaulting to 0 on every single game. The stat reported "Classic, 100%"
+# for everyone, forever, and the fixture supplied a `skinId` of 0 so nothing
+# disagreed with it. There is no alternative source in the timeline either.
 
 
 KILL_DIFF_ORDER = ["-5 or worse", "-4 to -1", "Even", "+1 to +4", "+5 or more"]
@@ -2013,3 +2014,186 @@ def teammate_synergy(df: pd.DataFrame, min_games: int = 3) -> pd.DataFrame:
     grouped = grouped[grouped["games"] >= min_games].copy()
     grouped["win_rate"] = (grouped["wins"] / grouped["games"] * 100).round(1)
     return grouped.sort_values(["games", "win_rate"], ascending=[False, False]).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Tilt
+#
+# "Tilt" is used loosely in League to mean playing worse because of how the
+# last game went. The interesting version is measurable: does *this* player's
+# win rate change after a loss, deep into a session, or when they requeue
+# immediately? Each of these is a comparison between two sets of that same
+# player's games, which is why they all report both sides and a sample size.
+#
+# Three deliberate constraints, because a "you're tilted" claim built on
+# thirty games is worse than no claim at all:
+#
+#   * every function returns games *and* wins for both sides, so the caller
+#     can show n and a margin rather than a bare percentage;
+#   * the comparison is always against the complement (see `split_record`),
+#     never against the whole history, which contains the subset;
+#   * nothing here decides significance. `separated()` does that, with a
+#     Bonferroni correction for how many comparisons the page makes.
+
+# What counts as a break between sessions. Two hours is arbitrary but has to
+# be *something*; queue times, champ select and a loading screen put ~40
+# minutes between consecutive games, so anything under an hour would split
+# ordinary evenings into several "sessions".
+SESSION_GAP_MINUTES = 120
+
+# What counts as requeueing immediately. Measured from the *end* of the
+# previous game, so a long game doesn't look like a long break.
+QUICK_REQUEUE_MINUTES = 10
+
+
+def _chronological(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "game_creation" not in df.columns:
+        return pd.DataFrame()
+    return df.sort_values("game_creation").reset_index(drop=True)
+
+
+def losing_streak_effect(df: pd.DataFrame, max_streak: int = 3) -> pd.DataFrame:
+    """Win rate of the next game, by how many losses came immediately before.
+
+    Row 0 is "after a win" — the baseline every other row should be read
+    against. Without it the streak rows are uninterpretable: a 45% win rate
+    after two losses means nothing until you know what this player does
+    otherwise.
+
+    Streaks are capped and the top row is "3+", because a player with 5,000
+    games has perhaps two 6-loss streaks and the win rate of two games is
+    noise presented as a finding.
+    """
+    d = _chronological(df)
+    if len(d) < 2:
+        return pd.DataFrame(columns=["after", "games", "wins", "win_rate"])
+
+    losses_before = []
+    run = 0
+    for win in d["win"]:
+        losses_before.append(run)
+        run = 0 if win else run + 1
+    d = d.assign(losses_before=losses_before).iloc[1:]
+
+    rows = []
+    for n in range(0, max_streak + 1):
+        subset = d[d["losses_before"] >= n] if n == max_streak else d[d["losses_before"] == n]
+        if subset.empty:
+            continue
+        label = "After a win" if n == 0 else (
+            f"After {n}+ losses" if n == max_streak else f"After {n} loss" +
+            ("es" if n > 1 else ""))
+        rows.append({"after": label, "games": len(subset),
+                     "wins": int(subset["win"].sum()),
+                     "win_rate": round(subset["win"].mean() * 100, 1)})
+    return pd.DataFrame(rows)
+
+
+def label_sessions(df: pd.DataFrame, gap_minutes: int = SESSION_GAP_MINUTES) -> pd.DataFrame:
+    """Add `session` (an id) and `game_in_session` (1-based) columns.
+
+    A session is a run of games with less than `gap_minutes` between the
+    *start* of one and the start of the next. Start-to-start rather than
+    end-to-start because `game_duration` is missing on remakes and this
+    shouldn't silently split a session on a bad row.
+    """
+    d = _chronological(df)
+    if d.empty:
+        return d
+    gaps = d["game_creation"].diff().dt.total_seconds().div(60)
+    new_session = gaps.isna() | (gaps > gap_minutes)
+    d = d.assign(session=new_session.cumsum())
+    d = d.assign(game_in_session=d.groupby("session").cumcount() + 1)
+    return d
+
+
+def session_depth_effect(df: pd.DataFrame, buckets=(1, 2, 3, 5)) -> pd.DataFrame:
+    """Win rate by how many games deep into a session you are.
+
+    The honest caveat, and it's a big one: **this is not a controlled
+    comparison.** Long sessions exist partly *because* they were going badly
+    — people chase losses — so a lower win rate at game 6 is partly selection
+    and partly fatigue, and this can't separate them. Presented as a pattern
+    worth noticing, never as a cause.
+    """
+    d = label_sessions(df)
+    if d.empty:
+        return pd.DataFrame(columns=["depth", "games", "wins", "win_rate"])
+
+    edges = list(buckets) + [10 ** 9]
+    rows = []
+    for low, high in zip(edges, edges[1:]):
+        subset = d[(d["game_in_session"] >= low) & (d["game_in_session"] < high)]
+        if subset.empty:
+            continue
+        label = f"Game {low}" if high == low + 1 else (
+            f"Game {low}+" if high == 10 ** 9 else f"Games {low}–{high - 1}")
+        rows.append({"depth": label, "games": len(subset),
+                     "wins": int(subset["win"].sum()),
+                     "win_rate": round(subset["win"].mean() * 100, 1)})
+    return pd.DataFrame(rows)
+
+
+def quick_requeue_effect(df: pd.DataFrame,
+                         minutes: int = QUICK_REQUEUE_MINUTES) -> dict:
+    """Win rate after requeueing fast versus taking a break — losses only.
+
+    Restricted to games that followed a *loss* on purpose. The question being
+    asked is "does going straight back in after losing hurt?", and mixing in
+    post-win games answers a different, less useful one.
+
+    Gap is measured from the end of the previous game (start + duration), so
+    a 45-minute slog doesn't get counted as a long break.
+    """
+    d = _chronological(df)
+    empty = {"quick": (0, 0), "break": (0, 0), "minutes": minutes}
+    # `game_duration_min`, in minutes — the parsed row has no seconds column.
+    # The first version read `game_duration` and, finding no such column,
+    # returned zeroes: the card rendered "no data" against 1,546 games that
+    # were right there. Guarding on a column name and returning empty when
+    # it's absent is the same silent-empty failure this project keeps hitting,
+    # so this one is checked against real data rather than a fixture.
+    if len(d) < 2 or "game_duration_min" not in d.columns:
+        return empty
+
+    previous_end = (d["game_creation"].shift(1)
+                    + pd.to_timedelta(d["game_duration_min"].shift(1).fillna(0),
+                                      unit="m"))
+    gap = (d["game_creation"] - previous_end).dt.total_seconds().div(60)
+    after_loss = ~d["win"].shift(1).fillna(True).astype(bool)
+
+    following = d[after_loss & gap.notna()]
+    gap_following = gap[after_loss & gap.notna()]
+    if following.empty:
+        return empty
+
+    quick = following[gap_following <= minutes]
+    slow = following[gap_following > minutes]
+    return {
+        "quick": (len(quick), int(quick["win"].sum())),
+        "break": (len(slow), int(slow["win"].sum())),
+        "minutes": minutes,
+    }
+
+
+def worst_hours(df: pd.DataFrame, tz=None, min_games: int = 20) -> pd.DataFrame:
+    """Win rate by hour of day, worst first, for hours with enough games.
+
+    `min_games` matters more here than almost anywhere else on the site: 24
+    buckets over a few thousand games leaves some hours with a handful, and
+    the worst-looking hour of a noisy set is almost always the emptiest one.
+    """
+    d = _chronological(df)
+    if d.empty:
+        return pd.DataFrame(columns=["hour", "label", "games", "wins", "win_rate"])
+
+    hours = d["game_creation"].dt.hour if tz is None else \
+        d["game_creation"].dt.tz_localize(None).dt.hour
+    grouped = d.assign(hour=hours).groupby("hour")["win"].agg(
+        games="count", wins="sum").reset_index()
+    grouped = grouped[grouped["games"] >= min_games]
+    if grouped.empty:
+        return pd.DataFrame(columns=["hour", "label", "games", "wins", "win_rate"])
+    grouped["win_rate"] = (grouped["wins"] / grouped["games"] * 100).round(1)
+    grouped["label"] = grouped["hour"].map(hour_label)
+    return grouped.sort_values("win_rate").reset_index(drop=True)

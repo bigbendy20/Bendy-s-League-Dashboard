@@ -157,3 +157,36 @@ class TestGameLengthBucket:
         assert game_length_bucket(30) == "30-40 min"
         assert game_length_bucket(40) == "40+ min"
         assert game_length_bucket(99) == "40+ min"
+
+
+class TestNoSkinData:
+    """match-v5 does not report which skin was used.
+
+    Checked against 4,000 real participant records from the local cache: not
+    one carried any key containing "skin", in any capitalisation. The site
+    used to show a "Most played skins" card built on
+    `participant.get("skinId", 0)`, which therefore returned 0 for every game
+    ever played and reported "Classic, 100%" for every champion. The fixture
+    supplied `"skinId": 0`, so the tests agreed with it — including one that
+    asserted the fabricated zero directly.
+
+    These guard the removal in both directions: the fixture must not reinvent
+    the field, and the parser must not resurrect a column built on it.
+    """
+
+    def test_the_fixture_does_not_invent_a_skin_field(self):
+        match = make_match()
+        for participant in match["info"]["participants"]:
+            keys = [k for k in participant if "skin" in k.lower()]
+            assert not keys, f"fixture invents {keys}"
+
+    def test_parse_match_emits_no_skin_column(self):
+        import stats
+
+        row = stats.parse_match(make_match(), "me-puuid")
+        assert not [k for k in row if "skin" in k.lower()]
+
+    def test_stats_exposes_no_skin_helper(self):
+        import stats
+
+        assert not hasattr(stats, "skin_usage")

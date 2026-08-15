@@ -62,7 +62,6 @@ def make_participant(
         "puuid": puuid,
         "championName": champion,
         "championId": 103,
-        "skinId": 0,
         "teamId": team_id,
         "teamPosition": position,
         "individualPosition": position,

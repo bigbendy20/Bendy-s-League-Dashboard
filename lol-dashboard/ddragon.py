@@ -90,21 +90,9 @@ def is_core_item(item_id: int, items_data: dict[int, dict]) -> bool:
     return total_gold >= 700
 
 
-def get_champion_skins(champion: str, version: str) -> dict[int, str]:
-    """Skin num -> skin name for one champion, via Data Dragon's per-champion
-    detail file. `skinId` in match-v5 participant data is the same as this
-    "num" (0 = default/classic skin)."""
-    try:
-        resp = requests.get(
-            f"https://ddragon.leagueoflegends.com/cdn/{version}/data/en_US/champion/{champion}.json",
-            timeout=5,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        champ_data = data["data"][champion]
-        return {skin["num"]: skin["name"] for skin in champ_data.get("skins", [])}
-    except Exception:
-        return {}
+# `get_champion_skins` was removed with the skins card. It worked fine — Data
+# Dragon does list every skin — but there was nothing to look up: match-v5
+# never reports which skin was used, so the ids fed to it were always 0.
 
 
 def rune_icon_url(icon_path: str) -> str:
