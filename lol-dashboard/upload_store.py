@@ -27,7 +27,8 @@ import sys
 import refresh_job
 
 
-def copy_store(source, destination, on_progress=None, dry_run=False) -> dict:
+def copy_store(source, destination, on_progress=None, dry_run=False,
+               overwrite: bool = False) -> dict:
     """Copy every profile, match and rank snapshot across.
 
     Returns counts. `on_progress` is called with a message per profile, so
@@ -54,7 +55,13 @@ def copy_store(source, destination, on_progress=None, dry_run=False) -> dict:
         if not dry_run:
             destination.upsert_profile(profile)
             if rows:
-                report["matches"] += destination.save_matches(puuid, rows)
+                # `overwrite` exists for one case: `parse_match` gained a
+                # column, the local rows were re-parsed to add it, and the
+                # hosted copy still holds the old shape. Without it the
+                # upload's own "never deletes, never duplicates" rule means
+                # the new field never reaches the deployed site.
+                report["matches"] += destination.save_matches(
+                    puuid, rows, overwrite=overwrite)
             for snapshot in snapshots:
                 # Replayed one at a time so the destination's own dedupe
                 # decides what's worth keeping, exactly as it would live.
@@ -87,6 +94,9 @@ def main(argv=None) -> int:
                         help="Source store. Defaults to the local SQLite file.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Report what would be copied without writing.")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="Rewrite rows the destination already has, so a "
+                             "newly parsed column reaches the hosted site.")
     args = parser.parse_args(argv)
 
     if not args.to:
@@ -118,7 +128,8 @@ def main(argv=None) -> int:
     destination = refresh_job.open_store(args.to)
 
     print(f"Copying from {args.source or 'local SQLite'} …")
-    report = copy_store(source, destination, on_progress=print, dry_run=args.dry_run)
+    report = copy_store(source, destination, on_progress=print,
+                        dry_run=args.dry_run, overwrite=args.overwrite)
 
     if args.dry_run:
         print(f"\nDry run — {report['profiles']} profile(s) would be copied.")

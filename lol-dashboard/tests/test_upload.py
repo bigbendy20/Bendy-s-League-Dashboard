@@ -280,3 +280,61 @@ class TestHostedCheck:
 
         empty = store_module.SqlStore(sqlite3.connect(":memory:"), paramstyle="?")
         assert check_hosted.summarise(empty) == []
+
+
+class TestOverwriteOnUpload:
+    """Getting a newly parsed column to the deployed site.
+
+    The uploader's normal rule is never to overwrite, so a re-run can't undo
+    what the live refresher has collected. That rule also blocks the one case
+    where rewriting is the whole point: local rows were re-parsed to add a
+    column, and Postgres still has the old shape.
+    """
+
+    def _store(self):
+        import sqlite3
+
+        import store as store_module
+
+        return store_module.SqlStore(sqlite3.connect(":memory:"), paramstyle="?")
+
+    def _seed(self, s, puuid, champion):
+        import stats
+        from conftest import make_match
+
+        s.upsert_profile({
+            "puuid": puuid, "display_name": "Bendy", "game_name": "Bendy",
+            "tag_line": "NA1", "platform_region": "na1",
+            "continental_region": "americas", "email": None})
+        row = stats.parse_match(make_match(match_id="NA1_1", puuid=puuid), puuid)
+        row["champion"] = champion
+        s.save_matches(puuid, [row], overwrite=True)
+
+    def test_by_default_the_destination_row_wins(self):
+        """Unchanged behaviour, and it protects games the refresher collected
+        while a backfill was running."""
+        import upload_store
+
+        source, destination = self._store(), self._store()
+        self._seed(source, "p1", "Zed")
+        self._seed(destination, "p1", "Ahri")
+        upload_store.copy_store(source, destination)
+        assert destination.load_matches("p1").iloc[0]["champion"] == "Ahri"
+
+    def test_with_overwrite_the_source_row_wins(self):
+        import upload_store
+
+        source, destination = self._store(), self._store()
+        self._seed(source, "p1", "Zed")
+        self._seed(destination, "p1", "Ahri")
+        upload_store.copy_store(source, destination, overwrite=True)
+        assert destination.load_matches("p1").iloc[0]["champion"] == "Zed"
+
+    def test_overwrite_still_adds_no_rows(self):
+        import upload_store
+
+        source, destination = self._store(), self._store()
+        self._seed(source, "p1", "Zed")
+        self._seed(destination, "p1", "Ahri")
+        upload_store.copy_store(source, destination, overwrite=True)
+        assert len(destination.load_matches("p1")) == 1
